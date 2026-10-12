@@ -428,7 +428,35 @@ private:
 
         R[Rd] = resultado;
     };
-    void instrução_branch(uint32_t opcode) {};
+    void instrução_branch(uint32_t opcode)
+    {
+        bool linkBranch = (opcode >> 24) & 0x1;
+
+        int32_t offset = (static_cast<int32_t>(opcode & 0x00FFFFFF) << 8) >> 6;
+
+        if (linkBranch)
+        {
+            R[14] = R[15] - 4;
+        }
+        R[15] = static_cast<uint32_t>(static_cast<int32_t>(R[15]) + offset);
+    }
+    void instrução_bx(uint32_t opcode)
+    {
+        uint8_t Rm = opcode & 0xF;
+        uint32_t address = R[Rm];
+
+        bool modoThumb = address & 0x1;
+        set_bit(CPSR, 5, modoThumb);
+
+        if (modoThumb)
+        {
+            R[15] = address & (~(uint32_t)1);
+        }
+        else
+        {
+            R[15] = address & (~(uint32_t)3);
+        }
+    }
 
 public:
     Cpu()
@@ -472,47 +500,27 @@ public:
     {
         instrução_mul(opcode);
     };
+    void debugar_branch(uint32_t opcode)
+    {
+        instrução_branch(opcode);
+    };
+    void debugar_bx(uint32_t opcode)
+    {
+        instrução_bx(opcode);
+    }
 };
 
 // codigo feito pelo gemini para debug
-
 #include <iostream>
 #include <iomanip>
 #include <cstdint>
 
-// Funções auxiliares para gerar os opcodes de teste dinamicamente
-uint32_t make_MUL(uint8_t Rd, uint8_t Rm, uint8_t Rs, bool S)
+// Função auxiliar para exibir valores em hexadecimal no terminal
+void print_hex(const std::string &label, uint32_t val)
 {
-    return 0xE0000090 | (S << 20) | (Rd << 16) | (Rs << 8) | Rm;
-}
-
-uint32_t make_MLA(uint8_t Rd, uint8_t Rm, uint8_t Rs, uint8_t Rn, bool S)
-{
-    return 0xE0200090 | (S << 20) | (Rd << 16) | (Rn << 12) | (Rs << 8) | Rm;
-}
-
-uint32_t make_MULL(bool U, bool A, bool S, uint8_t RdHi, uint8_t RdLo, uint8_t Rm, uint8_t Rs)
-{
-    // U=0 (Unsigned) | U=1 (Signed)
-    // A=0 (Multiply) | A=1 (Accumulate)
-    return 0xE0800090 | (U << 22) | (A << 21) | (S << 20) | (RdHi << 16) | (RdLo << 12) | (Rs << 8) | Rm;
-}
-
-void print_resultado(uint32_t cpsr, uint32_t rd, uint32_t rd2 = 0, bool is_long = false)
-{
-    bool n = (cpsr >> 31) & 1;
-    bool z = (cpsr >> 30) & 1;
-
-    if (is_long)
-    {
-        std::cout << "  Resultado Hi: 0x" << std::hex << std::uppercase << rd
-                  << " | Lo: 0x" << rd2 << std::dec << "\n";
-    }
-    else
-    {
-        std::cout << "  Resultado Rd: " << (int32_t)rd << " (0x" << std::hex << std::uppercase << rd << std::dec << ")\n";
-    }
-    std::cout << "  Flags -> N: " << n << " | Z: " << z << "\n\n";
+    std::cout << label << ": 0x"
+              << std::uppercase << std::setfill('0') << std::setw(8)
+              << std::hex << val << std::dec << "\n";
 }
 
 int main()
@@ -520,64 +528,76 @@ int main()
     Cpu cpu;
 
     std::cout << "========================================\n";
-    std::cout << "      BATERIA DE TESTES DA MUL ARM      \n";
+    std::cout << "      TESTANDO INSTRUÇÕES B E BL        \n";
     std::cout << "========================================\n\n";
 
-    // ---------------------------------------------------------
-    std::cout << "[TESTE 1] MUL Normal (Positivo x Positivo) | Sem Flags\n";
-    // 5 * 4 = 20
-    cpu.set_r(2, 5);
-    cpu.set_r(3, 4);
-    cpu.debugar_mul(make_MUL(1, 2, 3, false)); // R1 = R2 * R3
-    print_resultado(cpu.lerCPSR(), cpu.get_r(1));
+    // ----------------------------------------------------
+    // TESTE 1: Branch Simples (B +8 bytes)
+    // Opcode: 0xEA000002 (B para offset de +2 instruções/+8 bytes)
+    // ----------------------------------------------------
+    std::cout << "--- [1] Teste Branch Simples (B) ---\n";
+    cpu.set_r(15, 0x08000008); // Simula R15 apontando para PC + 8
 
-    // ---------------------------------------------------------
-    std::cout << "[TESTE 2] MULS Normal (Positivo x Negativo) | Com Flags\n";
-    // 5 * -4 = -20. (Z = 0, N = 1)
-    cpu.set_r(2, 5);
-    cpu.set_r(3, (uint32_t)-4);
-    cpu.debugar_mul(make_MUL(1, 2, 3, true)); // R1 = R2 * R3
-    print_resultado(cpu.lerCPSR(), cpu.get_r(1));
+    print_hex("R15 antes", cpu.get_r(15));
 
-    // ---------------------------------------------------------
-    std::cout << "[TESTE 3] MLAS (Acumula Negativo para dar Zero) | Com Flags\n";
-    // (-5 * 4) + 20 = 0. (Z = 1, N = 0)
-    cpu.set_r(2, (uint32_t)-5);
-    cpu.set_r(3, 4);
-    cpu.set_r(4, 20);
-    cpu.debugar_mul(make_MLA(1, 2, 3, 4, true)); // R1 = (R2 * R3) + R4
-    print_resultado(cpu.lerCPSR(), cpu.get_r(1));
+    // Executa instrução B +8 bytes
+    cpu.debugar_branch(0xEA000002);
 
-    // ---------------------------------------------------------
-    std::cout << "[TESTE 4] UMULL (Longo Sem Sinal) | Sem Flags\n";
-    // 0xFFFFFFFF (4.294.967.295) * 2 = 8.589.934.590 (0x00000001FFFFFFFE)
-    cpu.set_r(2, 0xFFFFFFFF);
-    cpu.set_r(3, 2);
-    // U=0 (unsigned), A=0 (no accum), S=0 (no flags). RdHi=1, RdLo=0
-    cpu.debugar_mul(make_MULL(false, false, false, 1, 0, 2, 3));
-    print_resultado(cpu.lerCPSR(), cpu.get_r(1), cpu.get_r(0), true);
+    print_hex("R15 apos (esperado 0x08000010)", cpu.get_r(15));
+    std::cout << "\n";
 
-    // ---------------------------------------------------------
-    std::cout << "[TESTE 5] SMULLS (Longo Com Sinal) | Com Flags\n";
-    // -1 (0xFFFFFFFF) * 2 = -2 (0xFFFFFFFFFFFFFFFE)
-    cpu.set_r(2, 0xFFFFFFFF);
-    cpu.set_r(3, 2);
-    // U=1 (signed), A=0, S=1. RdHi=1, RdLo=0
-    cpu.debugar_mul(make_MULL(true, false, true, 1, 0, 2, 3));
-    print_resultado(cpu.lerCPSR(), cpu.get_r(1), cpu.get_r(0), true);
+    // ----------------------------------------------------
+    // TESTE 2: Branch with Link (BL +20 bytes)
+    // Opcode: 0xEB000005 (BL com bit de Link ativo)
+    // ----------------------------------------------------
+    std::cout << "--- [2] Teste Branch with Link (BL) ---\n";
+    cpu.set_r(15, 0x08000008); // Reset R15
+    cpu.set_r(14, 0x00000000); // Reset R14 (LR)
 
-    // ---------------------------------------------------------
-    std::cout << "[TESTE 6] SMLALS (Longo Com Sinal + Acumulativo resultando em Zero) | Com Flags\n";
-    // Acumulador (RdHi:RdLo) = 2.
-    // Multiplicação: -1 * 2 = -2.
-    // Total: -2 + 2 = 0. (Z = 1, N = 0)
-    cpu.set_r(1, 0);          // RdHi
-    cpu.set_r(0, 2);          // RdLo
-    cpu.set_r(2, 0xFFFFFFFF); // -1
-    cpu.set_r(3, 2);
-    // U=1, A=1, S=1.
-    cpu.debugar_mul(make_MULL(true, true, true, 1, 0, 2, 3));
-    print_resultado(cpu.lerCPSR(), cpu.get_r(1), cpu.get_r(0), true);
+    print_hex("R15 antes", cpu.get_r(15));
+    print_hex("R14 (LR) antes", cpu.get_r(14));
+
+    // Executa BL (+20 bytes)
+    cpu.debugar_branch(0xEB000005);
+
+    print_hex("R15 apos (esperado 0x0800001C)", cpu.get_r(15));
+    print_hex("R14 (LR) salvo (esperado 0x08000004)", cpu.get_r(14));
+    std::cout << "\n";
+
+    std::cout << "========================================\n";
+    std::cout << "           TESTANDO BX                  \n";
+    std::cout << "========================================\n\n";
+
+    // ----------------------------------------------------
+    // TESTE 3: BX com mudanca para modo THUMB (Bit 0 de R0 = 1)
+    // Opcode BX R0: 0xE12FFF10
+    // ----------------------------------------------------
+    std::cout << "--- [3] Teste BX R0 (Mudanca para THUMB) ---\n";
+    cpu.set_r(0, 0x08000101); // Endereco impar (bit 0 = 1 -> Modo THUMB)
+
+    print_hex("R0 (Alvo)", cpu.get_r(0));
+    print_hex("CPSR antes", cpu.lerCPSR());
+
+    cpu.debugar_bx(0xE12FFF10);
+
+    print_hex("R15 apos (esperado 0x08000100 - alinhado 2B)", cpu.get_r(15));
+    print_hex("CPSR apos (esperado Bit 5 = 1 / Thumb ativo)", cpu.lerCPSR());
+    std::cout << "Modo THUMB Ativo? " << ((cpu.lerCPSR() & (1 << 5)) ? "SIM" : "NAO") << "\n\n";
+
+    // ----------------------------------------------------
+    // TESTE 4: BX com retorno para modo ARM (Bit 0 de R1 = 0)
+    // Opcode BX R1: 0xE12FFF11
+    // ----------------------------------------------------
+    std::cout << "--- [4] Teste BX R1 (Retorno para ARM) ---\n";
+    cpu.set_r(1, 0x08000200); // Endereco par (bit 0 = 0 -> Modo ARM)
+
+    print_hex("R1 (Alvo)", cpu.get_r(1));
+
+    cpu.debugar_bx(0xE12FFF11);
+
+    print_hex("R15 apos (esperado 0x08000200 - alinhado 4B)", cpu.get_r(15));
+    print_hex("CPSR apos (esperado Bit 5 = 0 / ARM ativo)", cpu.lerCPSR());
+    std::cout << "Modo THUMB Ativo? " << ((cpu.lerCPSR() & (1 << 5)) ? "SIM" : "NAO") << "\n\n";
 
     return 0;
 }
