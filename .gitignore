@@ -2,6 +2,7 @@
 *.o
 *.out
 *.exe
+*.debug
 build/
 bin/
 
