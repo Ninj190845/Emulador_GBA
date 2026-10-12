@@ -1,0 +1,13 @@
+# Executáveis e arquivos objeto do C++
+*.o
+*.out
+*.exe
+build/
+bin/
+
+# Configurações de IDEs (VS Code, CLion, etc.)
+.vscode/
+.idea/
+
+# BIOS do GBA (não suba pro GitHub para evitar strike)
+gba_bios.bin
