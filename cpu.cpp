@@ -1,5 +1,7 @@
-#include <cstring>
+#include <bit>
 #include <cstdint>
+#include <cstring>
+#include <iomanip>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -44,15 +46,6 @@ private:
     uint32_t SPSR_und = 0;
 
     // Funções de apoio
-    uint32_t ror32(uint32_t value, uint8_t count)
-    {
-        count = count % 32;
-        if (count == 0)
-        {
-            return value;
-        }
-        return (value >> count) | (value << (32 - count));
-    };
     uint32_t processar_op2(uint32_t opcode, uint8_t Rm, uint8_t Rs, bool &flagC)
     {
         uint32_t val = R[Rm]; // Boa prática: inicializar com 0
@@ -151,9 +144,9 @@ private:
             {
                 flagC = get_bit(R[Rm], 31);
             }
-            else // <--- CORRIGIDO AQUI! Cobre qualquer shift de 1 a 31 e o resto das divisões.
+            else // Cobre qualquer shift de 1 a 31 e o resto das divisões.
             {
-                val = ror32(R[Rm], shiftCount);
+                val = std::rotr(R[Rm], shiftCount);
                 flagC = get_bit(R[Rm], ((shiftCount % 32) - 1));
             }
             break;
@@ -162,7 +155,6 @@ private:
             break;
         }
 
-        // NUNCA ESQUECER DO RETURN!
         return val;
     }
 
@@ -200,7 +192,7 @@ private:
             std::cout << "[ALU] Operando 2: Imediato\n";
             uint8_t rorCount = ((opcode >> 8) & 0xF) * 2;
             uint32_t nn = opcode & 0xFF;
-            val = ror32(nn, rorCount);
+            val = std::rotr(nn, rorCount);
             if (rorCount != 0)
             {
                 flagC = get_bit(val, 31);
@@ -239,8 +231,8 @@ private:
 
         case 0x3: // RSB
             resultado = val - R[Rn];
-            flagC = (val >= R[Rn]);                            // CORRIGIDO: Invertido em relacao ao SUB
-            flagV = ((R[Rn] ^ val) & (val ^ resultado)) >> 31; // CORRIGIDO
+            flagC = (val >= R[Rn]);
+            flagV = ((R[Rn] ^ val) & (val ^ resultado)) >> 31;
             break;
 
         case 0x4: // ADD
@@ -251,13 +243,13 @@ private:
 
         case 0x5: // ADC
             resultado = R[Rn] + val + Carry;
-            flagC = ((uint64_t)R[Rn] + (uint64_t)val + Carry) > UINT32_MAX; // CORRIGIDO: adc soma o Carry
+            flagC = ((uint64_t)R[Rn] + (uint64_t)val + Carry) > UINT32_MAX;
             flagV = ((R[Rn] ^ resultado) & (val ^ resultado)) >> 31;
             break;
 
         case 0x6: // SBC
             resultado = R[Rn] - val - !Carry;
-            flagC = ((uint64_t)R[Rn] - (uint64_t)val - !Carry) <= UINT32_MAX; // Forma segura sem underflow
+            flagC = ((uint64_t)R[Rn] - (uint64_t)val - !Carry) <= UINT32_MAX;
             flagV = ((R[Rn] ^ val) & (R[Rn] ^ resultado)) >> 31;
             break;
 
@@ -360,10 +352,6 @@ private:
         bool signedFlag = ((opcode >> 22) & 0x1);
         bool aculmulativo = (opcode >> 21) & 0x1;
 
-        // flags
-        bool flag_N = 0;
-        bool flag_Z = 0;
-
         uint32_t resultado = 0;
         uint32_t resultadoLow = 0;
         if (longFlag)
@@ -373,7 +361,7 @@ private:
                 std::cout << "[MUL] [ERRO] Uso invalido dos registradores para mutiplicação!\n";
                 return;
             }
-            // multiplicaçlão de 64 bits
+            // multiplicação de 64 bits
             uint64_t buffer_result = 0;
             if (aculmulativo)
             {
@@ -530,7 +518,7 @@ private:
             uint32_t nn = opcode & 0xFF;
             uint8_t rorCount = ((opcode >> 8) & 0xF) * 2;
 
-            programState = ror32(nn, rorCount);
+            programState = std::rotr(nn, rorCount);
         }
         else
         {
@@ -584,11 +572,9 @@ private:
     }
 
 public:
-    Cpu()
-    {
-        return;
-    };
+    Cpu() = default;
     ~Cpu() = default;
+
     void set_r(uint8_t index, uint32_t value)
     {
         if (index < 16)
@@ -623,7 +609,7 @@ public:
     uint32_t getSPSR_irq()
     {
         return SPSR_irq;
-    };
+    }
 
     void debugar_alu(uint32_t opcode)
     {
@@ -651,12 +637,6 @@ public:
     }
 };
 
-// codigo feito pelo gemini para debug
-#include <iostream>
-#include <iomanip>
-#include <cstdint>
-
-// Função auxiliar para exibir valores em hexadecimal no terminal
 void print_hex(const std::string &label, uint32_t val)
 {
     std::cout << label << ": 0x"
@@ -666,13 +646,6 @@ void print_hex(const std::string &label, uint32_t val)
 
 int main()
 {
-#include <iostream>
-#include <iomanip>
-
-    // Assumindo a instância da sua CPU
-    // cpu.setCPSR(...);
-    // cpu.instrução_mrs(...); etc.
-
     Cpu cpu;
 
     std::cout << "========================================\n";
