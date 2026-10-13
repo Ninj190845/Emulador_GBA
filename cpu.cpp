@@ -32,7 +32,7 @@ private:
     uint32_t SPSR_fiq = 0;
 
     uint32_t R13_svc[2] = {0};
-    uint32_t SPSR_svc = 0;
+    uint32_t SPSR_swi = 0;
 
     uint32_t R13_abt[2] = {0};
     uint32_t SPSR_abt = 0;
@@ -427,7 +427,7 @@ private:
         }
 
         R[Rd] = resultado;
-    };
+    }
     void instrução_branch(uint32_t opcode)
     {
         bool linkBranch = (opcode >> 24) & 0x1;
@@ -456,6 +456,131 @@ private:
         {
             R[15] = address & (~(uint32_t)3);
         }
+    }
+    void instrução_msr(uint32_t opcode)
+    {
+        bool imediato = (opcode >> 25) & 0x1;
+
+        bool spsrFlag = (opcode >> 22) & 0x1;
+        uint32_t *endereçoPSR = &CPSR;
+        uint32_t programState = 0;
+
+        uint32_t fields = (opcode >> 16) & 0xF;
+        uint32_t mask = 0;
+        if (get_bit(fields, 0) & 0x1)
+        {
+            // Campo 'c'
+            mask |= 0x000000FF;
+        }
+        if (get_bit(fields, 1) & 0x1)
+        {
+            // Campo 'x'
+            mask |= 0x0000FF00;
+        }
+        if (get_bit(fields, 2) & 0x1)
+        {
+            // Campo 's'
+            mask |= 0x00FF0000;
+        }
+        if (get_bit(fields, 3) & 0x1)
+        {
+            // Campo 'f'
+            mask |= 0xFF000000;
+        }
+        uint8_t modeBits = CPSR & 0x1F;
+
+        if (modeBits == 0b10000)
+        {
+            mask &= 0xFF000000;
+        }
+
+        if (spsrFlag)
+        {
+            switch (modeBits)
+            {
+            case 0b10000: // Modo User
+            case 0b11111: // Modo System
+            case 0b10001: // Modo FIQ
+                return;   // Não possuem SPSR acessível / ignorado no GBA
+
+            case 0b10010: // Modo IRQ
+                endereçoPSR = &SPSR_irq;
+                break;
+
+            case 0b10011: // Modo SWI / Supervisor
+                endereçoPSR = &SPSR_swi;
+                break;
+
+            case 0b10111: // Modo Abort
+                endereçoPSR = &SPSR_abt;
+                break;
+
+            case 0b11011: // Modo Undefined
+                endereçoPSR = &SPSR_und;
+                break;
+
+            default:
+                std::cout << "[DEBUG] Caiu no default! modeBits era: 0x" << std::hex << (int)modeBits << "\n";
+                return;
+            }
+        }
+
+        if (imediato)
+        {
+            uint32_t nn = opcode & 0xFF;
+            uint8_t rorCount = ((opcode >> 8) & 0xF) * 2;
+
+            programState = ror32(nn, rorCount);
+        }
+        else
+        {
+            uint8_t Rm = opcode & 0xF;
+            programState = R[Rm];
+        }
+
+        std::cout << "[DEBUG] programState: 0x" << std::hex << programState << " | mask: 0x" << mask << "\n";
+
+        *endereçoPSR = (*endereçoPSR & ~mask) | (programState & mask);
+    }
+    void instrução_mrs(uint32_t opcode)
+    {
+        uint8_t Rd = (opcode >> 12) & 0xF;
+
+        bool spsrFlag = (opcode >> 22) & 0x1;
+        uint32_t *endereçoPSR = &CPSR;
+
+        if (spsrFlag)
+        {
+            uint8_t modeBits = CPSR & 0x1F;
+            switch (modeBits)
+            {
+            case 0b10000: // Modo User
+            case 0b11111: // Modo System
+            case 0b10001: // Modo FIQ
+                return;   // Não possuem SPSR acessível / ignorado no GBA
+
+            case 0b10010: // Modo IRQ
+                endereçoPSR = &SPSR_irq;
+                break;
+
+            case 0b10011: // Modo SWI / Supervisor
+                endereçoPSR = &SPSR_swi;
+                break;
+
+            case 0b10111: // Modo Abort
+                endereçoPSR = &SPSR_abt;
+                break;
+
+            case 0b11011: // Modo Undefined
+                endereçoPSR = &SPSR_und;
+                break;
+
+            default:
+                return;
+            }
+        }
+
+        R[Rd] = *endereçoPSR;
     }
 
 public:
@@ -487,26 +612,42 @@ public:
             return 0;
         }
     }
-    uint32_t lerCPSR()
+    uint32_t getCPSR()
     {
         return CPSR;
+    }
+    void setCPSR(uint32_t value)
+    {
+        CPSR = value;
+    }
+    uint32_t getSPSR_irq()
+    {
+        return SPSR_irq;
     };
 
     void debugar_alu(uint32_t opcode)
     {
         instrução_alu(opcode);
-    };
+    }
     void debugar_mul(uint32_t opcode)
     {
         instrução_mul(opcode);
-    };
+    }
     void debugar_branch(uint32_t opcode)
     {
         instrução_branch(opcode);
-    };
+    }
     void debugar_bx(uint32_t opcode)
     {
         instrução_bx(opcode);
+    }
+    void debugar_mrs(uint32_t opcode)
+    {
+        instrução_mrs(opcode);
+    }
+    void debugar_msr(uint32_t opcode)
+    {
+        instrução_msr(opcode);
     }
 };
 
@@ -525,79 +666,53 @@ void print_hex(const std::string &label, uint32_t val)
 
 int main()
 {
+#include <iostream>
+#include <iomanip>
+
+    // Assumindo a instância da sua CPU
+    // cpu.setCPSR(...);
+    // cpu.instrução_mrs(...); etc.
+
     Cpu cpu;
 
     std::cout << "========================================\n";
-    std::cout << "      TESTANDO INSTRUÇÕES B E BL        \n";
+    std::cout << "         TESTANDO MRS E MSR             \n";
     std::cout << "========================================\n\n";
 
     // ----------------------------------------------------
-    // TESTE 1: Branch Simples (B +8 bytes)
-    // Opcode: 0xEA000002 (B para offset de +2 instruções/+8 bytes)
+    // [1] Teste MRS: Ler CPSR para R0
     // ----------------------------------------------------
-    std::cout << "--- [1] Teste Branch Simples (B) ---\n";
-    cpu.set_r(15, 0x08000008); // Simula R15 apontando para PC + 8
+    cpu.setCPSR(0x60000010);          // Define CPSR com flags e modo User (0x10)
+    uint32_t opcode_mrs = 0xE10F0000; // MRS R0, CPSR
 
-    print_hex("R15 antes", cpu.get_r(15));
+    cpu.debugar_mrs(opcode_mrs);
 
-    // Executa instrução B +8 bytes
-    cpu.debugar_branch(0xEA000002);
-
-    print_hex("R15 apos (esperado 0x08000010)", cpu.get_r(15));
-    std::cout << "\n";
+    std::cout << "--- [1] Teste MRS (CPSR -> R0) ---\n";
+    std::cout << "CPSR configurado : 0x" << std::hex << 0x60000010 << "\n";
+    std::cout << "R0 apos MRS      : 0x" << std::hex << cpu.get_r(0) << "\n\n";
 
     // ----------------------------------------------------
-    // TESTE 2: Branch with Link (BL +20 bytes)
-    // Opcode: 0xEB000005 (BL com bit de Link ativo)
+    // [2] Teste MSR: Alterar flags do CPSR via Registrador (R1 -> CPSR_f)
     // ----------------------------------------------------
-    std::cout << "--- [2] Teste Branch with Link (BL) ---\n";
-    cpu.set_r(15, 0x08000008); // Reset R15
-    cpu.set_r(14, 0x00000000); // Reset R14 (LR)
+    cpu.setCPSR(0x00000013);              // Modo Supervisor (SVC / 0x13)
+    cpu.set_r(1, 0xF0000000);             // R1 com flags N, Z, C, V ativas
+    uint32_t opcode_msr_reg = 0xE128F001; // MSR CPSR_f, R1
 
-    print_hex("R15 antes", cpu.get_r(15));
-    print_hex("R14 (LR) antes", cpu.get_r(14));
+    cpu.debugar_msr(opcode_msr_reg);
 
-    // Executa BL (+20 bytes)
-    cpu.debugar_branch(0xEB000005);
-
-    print_hex("R15 apos (esperado 0x0800001C)", cpu.get_r(15));
-    print_hex("R14 (LR) salvo (esperado 0x08000004)", cpu.get_r(14));
-    std::cout << "\n";
-
-    std::cout << "========================================\n";
-    std::cout << "           TESTANDO BX                  \n";
-    std::cout << "========================================\n\n";
+    std::cout << "--- [2] Teste MSR Reg (R1 -> CPSR_f) ---\n";
+    std::cout << "CPSR esperado    : 0xF0000013\n";
+    std::cout << "CPSR apos MSR    : 0x" << std::hex << cpu.getCPSR() << "\n\n";
 
     // ----------------------------------------------------
-    // TESTE 3: BX com mudanca para modo THUMB (Bit 0 de R0 = 1)
-    // Opcode BX R0: 0xE12FFF10
+    // [3] Teste MSR: Alterar SPSR_irq via Imediato
     // ----------------------------------------------------
-    std::cout << "--- [3] Teste BX R0 (Mudanca para THUMB) ---\n";
-    cpu.set_r(0, 0x08000101); // Endereco impar (bit 0 = 1 -> Modo THUMB)
+    cpu.setCPSR(0x00000012);              // Entra no modo IRQ (0x12)
+    uint32_t opcode_msr_imm = 0xE368F480; // MSR SPSR_f, #0x80000000 (imm 0x80, rot 0)
 
-    print_hex("R0 (Alvo)", cpu.get_r(0));
-    print_hex("CPSR antes", cpu.lerCPSR());
+    cpu.debugar_msr(opcode_msr_imm);
 
-    cpu.debugar_bx(0xE12FFF10);
-
-    print_hex("R15 apos (esperado 0x08000100 - alinhado 2B)", cpu.get_r(15));
-    print_hex("CPSR apos (esperado Bit 5 = 1 / Thumb ativo)", cpu.lerCPSR());
-    std::cout << "Modo THUMB Ativo? " << ((cpu.lerCPSR() & (1 << 5)) ? "SIM" : "NAO") << "\n\n";
-
-    // ----------------------------------------------------
-    // TESTE 4: BX com retorno para modo ARM (Bit 0 de R1 = 0)
-    // Opcode BX R1: 0xE12FFF11
-    // ----------------------------------------------------
-    std::cout << "--- [4] Teste BX R1 (Retorno para ARM) ---\n";
-    cpu.set_r(1, 0x08000200); // Endereco par (bit 0 = 0 -> Modo ARM)
-
-    print_hex("R1 (Alvo)", cpu.get_r(1));
-
-    cpu.debugar_bx(0xE12FFF11);
-
-    print_hex("R15 apos (esperado 0x08000200 - alinhado 4B)", cpu.get_r(15));
-    print_hex("CPSR apos (esperado Bit 5 = 0 / ARM ativo)", cpu.lerCPSR());
-    std::cout << "Modo THUMB Ativo? " << ((cpu.lerCPSR() & (1 << 5)) ? "SIM" : "NAO") << "\n\n";
-
-    return 0;
+    std::cout << "--- [3] Teste MSR Imm (Imediato -> SPSR_irq) ---\n";
+    std::cout << "SPSR_irq esperado: 0x80000000\n";
+    std::cout << "SPSR_irq apos MSR: 0x" << std::hex << cpu.getSPSR_irq() << "\n";
 }
