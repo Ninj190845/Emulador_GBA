@@ -1,691 +1,914 @@
+#include "cpu.hpp"
 #include <bit>
 #include <cstdint>
-#include <cstring>
-#include <iomanip>
 #include <iostream>
-#include <string>
-#include <vector>
 
-// utilidades de bit
 inline void set_bit(uint32_t &reg, uint8_t bit, bool value)
 {
     if (value)
     {
-        reg |= (1U << bit); // Seta o bit especificado para 1
+        reg |= (1U << bit);
     }
     else
     {
-        reg &= ~(1U << bit); // Limpa o bit especificado para 0
+        reg &= ~(1U << bit);
     }
 }
-inline bool get_bit(uint32_t &reg, uint8_t bit)
+inline bool get_bit(uint32_t reg, uint8_t bit)
 {
     return (reg >> bit) & 0x1;
 }
 
-class Cpu
+Cpu::Cpu(Mem *mem) : memoria(mem) {}
+
+OpResult Cpu::shift_barrier(uint32_t shiftType, uint32_t valor, uint8_t count, bool origemImediato, bool flagC)
 {
-private:
-    // registradores
-    uint32_t R[16] = {0};
-    uint32_t CPSR = 0;
-
-    uint32_t R8_fiq[7] = {0};
-    uint32_t SPSR_fiq = 0;
-
-    uint32_t R13_svc[2] = {0};
-    uint32_t SPSR_swi = 0;
-
-    uint32_t R13_abt[2] = {0};
-    uint32_t SPSR_abt = 0;
-
-    uint32_t R13_irq[2] = {0};
-    uint32_t SPSR_irq = 0;
-
-    uint32_t R13_und[2] = {0};
-    uint32_t SPSR_und = 0;
-
-    // Funções de apoio
-    uint32_t processar_op2(uint32_t opcode, uint8_t Rm, uint8_t Rs, bool &flagC)
+    uint32_t resultado = 0;
+    shiftType &= 0b11;
+    switch (shiftType)
     {
-        uint32_t val = R[Rm]; // Boa prática: inicializar com 0
+    case 0b00:
+    {
+        if (count == 0)
+        {
+            resultado = valor;
+        }
+        else if (count == 32)
+        {
+            flagC = get_bit(valor, 0);
+        }
+        else if (count > 32)
+        {
+            flagC = 0;
+            break;
+        }
+        else
+        {
+            resultado = valor << count;
+            flagC = get_bit(valor, 32 - count);
+        }
+        break;
+    }
+    case 0b01:
+    {
+        if (count == 0)
+        {
+            if (origemImediato)
+            {
+                flagC = get_bit(valor, 31);
+            }
+            else
+            {
+                resultado = valor;
+            }
+        }
+        else if (count == 32)
+        {
+            flagC = get_bit(valor, 31);
+        }
+        else if (count > 32)
+        {
+            flagC = 0;
+        }
+        else
+        {
+            resultado = valor >> count;
+            flagC = get_bit(valor, count - 1);
+        }
+
+        break;
+    }
+    case 0b10:
+    {
+        if (count == 0)
+        {
+            if (origemImediato)
+            {
+                if (get_bit(valor, 31))
+                {
+                    resultado = UINT32_MAX;
+                }
+                else
+                {
+                    resultado = 0x00000000;
+                }
+                flagC = get_bit(valor, 31);
+            }
+            else
+            {
+                resultado = valor;
+            }
+        }
+        else if (count >= 32)
+        {
+            flagC = get_bit(valor, 31);
+            if (get_bit(valor, 31))
+            {
+                resultado = UINT32_MAX;
+            }
+            else
+            {
+                resultado = 0x00000000;
+            }
+        }
+        else
+        {
+            resultado = (int32_t)valor >> count;
+            flagC = get_bit(valor, count - 1);
+        }
+
+        break;
+    }
+    case 0b11:
+    {
+        if (count == 0)
+        {
+            if (origemImediato)
+            {
+                flagC = get_bit(valor, 0);
+
+                resultado = valor >> 1;
+                set_bit(resultado, 31, flagC);
+            }
+            else
+            {
+                resultado = valor;
+            }
+        }
+        else
+        {
+            resultado = std::rotr(valor, count);
+            flagC = get_bit(resultado, 31);
+        }
+
+        break;
+    }
+    default:
+        break;
+    }
+    OpResult returning(resultado, 0, true);
+    return returning;
+}
+
+void Cpu::instrução_alu(uint32_t opcode)
+{
+    uint8_t Rn = (opcode >> 16) & 0xF;
+    uint8_t Rd = (opcode >> 12) & 0xF;
+
+    bool updateFlag = (opcode >> 20) & 0x1;
+    bool imediatoFlag = (opcode >> 25) & 0x1;
+
+    bool flagN;
+    bool flagZ;
+    bool flagC = get_bit(CPSR, 29);
+    bool flagV = get_bit(CPSR, 28);
+    bool Carry = flagC;
+
+    uint32_t val;
+    uint8_t alu_op = (opcode >> 21) & 0xF;
+
+    if (imediatoFlag)
+    {
+        uint8_t rorCount = ((opcode >> 8) & 0xF) * 2;
+        uint32_t nn = opcode & 0xFF;
+        val = std::rotr(nn, rorCount);
+        if (rorCount != 0)
+        {
+            flagC = get_bit(val, 31);
+        }
+    }
+    else
+    {
+        uint8_t Rm = opcode & 0xF;
+
+        uint8_t count = 0;
+        bool origemImediato = !((opcode >> 4) & 0x1);
+
+        if (origemImediato)
+        {
+            count = (opcode >> 7) & 0x1F;
+        }
+        else
+        {
+            uint8_t Rs = (opcode >> 8) & 0xF;
+            count = R[Rs] & 0xFF;
+        }
 
         uint8_t shiftType = (opcode >> 5) & 0b11;
-        uint8_t shiftCount;
-        bool shiftImediato = !((opcode >> 4) & 0x1);
 
-        if (shiftImediato)
-        {
-            std::cout << "Shift Imediato\n";
-            shiftCount = (opcode >> 7) & 0x1F;
-        }
-        else
-        {
-            std::cout << "Shift por Registrador\n";
-            shiftCount = R[Rs] & 0xFF;
-            std::cout << (R[Rs] & 0xFF) << "\n";
-        }
+        OpResult op2 = shift_barrier(shiftType, R[Rm], count, origemImediato, flagC);
 
-        std::cout << "Shift Type: ";
-        switch (shiftType)
-        {
-        case 0:
-            std::cout << "LSL\n";
-            if (shiftCount >= 32)
-            {
-                flagC = (shiftCount == 32) ? get_bit(R[Rm], 0) : 0;
-                val = 0;
-            }
-            else
-            {
-                flagC = get_bit(R[Rm], (32 - shiftCount));
-                val = R[Rm] << shiftCount;
-            }
-            break;
-
-        case 1:
-            std::cout << "LSR\n";
-            if (shiftCount == 0)
-            {
-                std::cout << "Shiftcount = 0\n";
-                if (shiftImediato)
-                {
-                    val = 0;
-                    flagC = get_bit(R[Rm], 31);
-                }
-            }
-            else if (shiftCount >= 32)
-            {
-                std::cout << "shiftcount >= 32\n";
-                val = 0;
-                flagC = (shiftCount == 32) ? get_bit(R[Rm], 31) : 0;
-            }
-            else
-            {
-                std::cout << static_cast<uint>(shiftCount) << "\n";
-                val = R[Rm] >> shiftCount;
-                flagC = get_bit(R[Rm], (shiftCount - 1));
-            }
-            break;
-
-        case 2:
-            std::cout << "ASR\n";
-            if (shiftCount == 0)
-            {
-                if (shiftImediato)
-                {
-                    val = get_bit(R[Rm], 31) ? 0xFFFFFFFF : 0;
-                    flagC = get_bit(R[Rm], 31);
-                }
-            }
-            else if (shiftCount >= 32)
-            {
-                val = get_bit(R[Rm], 31) ? 0xFFFFFFFF : 0;
-                flagC = get_bit(R[Rm], 31);
-            }
-            else
-            {
-                val = static_cast<uint32_t>(static_cast<int32_t>(R[Rm]) >> shiftCount);
-                flagC = get_bit(R[Rm], (shiftCount - 1));
-            }
-            break;
-
-        case 3:
-            std::cout << "ROR / RRX\n";
-            if (shiftCount == 0)
-            {
-                if (shiftImediato)
-                {
-                    val = (get_bit(CPSR, 29) << 31) | (R[Rm] >> 1);
-                    flagC = get_bit(R[Rm], 0);
-                }
-            }
-            else if ((shiftCount % 32) == 0) // Otimizado: Só testa se é múltiplo de 32 (32, 64, 96...)
-            {
-                flagC = get_bit(R[Rm], 31);
-            }
-            else // Cobre qualquer shift de 1 a 31 e o resto das divisões.
-            {
-                val = std::rotr(R[Rm], shiftCount);
-                flagC = get_bit(R[Rm], ((shiftCount % 32) - 1));
-            }
-            break;
-
-        default:
-            break;
-        }
-
-        return val;
+        val = op2.valor;
+        flagC = op2.carryOut;
     }
 
-    // funções de instruções
-    void instrução_alu(uint32_t opcode)
+    uint32_t resultado;
+    bool escrever_rd = true;
+
+    switch (alu_op)
     {
-        std::cout << "\n[ALU] === INICIANDO INSTRUCAO DA ULA ===\n";
-        std::cout << "[ALU] Opcode: 0x" << std::hex << opcode << std::dec << "\n";
+    case 0x0:
+        resultado = R[Rn] & val;
+        break;
 
-        // index Registradores
-        uint8_t Rn = (opcode >> 16) & 0xF;
-        uint8_t Rd = (opcode >> 12) & 0xF;
+    case 0x1:
+        resultado = R[Rn] ^ val;
+        break;
 
-        // bits de flag
-        bool updateFlag = (opcode >> 20) & 0x1;
-        bool imediatoFlag = (opcode >> 25) & 0x1;
+    case 0x2:
+        resultado = R[Rn] - val;
+        flagC = (R[Rn] >= val);
+        flagV = ((R[Rn] ^ val) & (R[Rn] ^ resultado)) >> 31;
+        break;
 
-        // flags atuais (para log e cálculos)
-        bool flagN;
-        bool flagZ;
-        bool flagC = get_bit(CPSR, 29);
-        bool flagV = get_bit(CPSR, 28);
-        bool Carry = flagC; // Guarda o Carry inicial para o ADC/SBC
+    case 0x3:
+        resultado = val - R[Rn];
+        flagC = (val >= R[Rn]);
+        flagV = ((R[Rn] ^ val) & (val ^ resultado)) >> 31;
+        break;
 
-        std::cout << "[ALU] R[" << +Rn << "] (Operando 1): 0x" << std::hex << R[Rn] << std::dec << "\n";
-        std::cout << "[ALU] Update Flags (Bit S): " << (updateFlag ? "SIM" : "NAO") << "\n";
+    case 0x4:
+        resultado = R[Rn] + val;
+        flagC = ((uint64_t)R[Rn] + (uint64_t)val) > UINT32_MAX;
+        flagV = ((R[Rn] ^ resultado) & (val ^ resultado)) >> 31;
+        break;
 
-        // op2
-        uint32_t val;
-        uint8_t alu_op = (opcode >> 21) & 0xF;
+    case 0x5:
+        resultado = R[Rn] + val + Carry;
+        flagC = ((uint64_t)R[Rn] + (uint64_t)val + Carry) > UINT32_MAX;
+        flagV = ((R[Rn] ^ resultado) & (val ^ resultado)) >> 31;
+        break;
 
-        if (imediatoFlag)
-        {
-            // calculo com valor imediato rotacionando
-            std::cout << "[ALU] Operando 2: Imediato\n";
-            uint8_t rorCount = ((opcode >> 8) & 0xF) * 2;
-            uint32_t nn = opcode & 0xFF;
-            val = std::rotr(nn, rorCount);
-            if (rorCount != 0)
-            {
-                flagC = get_bit(val, 31);
-            }
-        }
-        else
-        {
-            std::cout << "[ALU] Operando 2: Registrador (Shift)\n";
-            uint8_t Rs = (opcode >> 8) & 0xF;
-            uint8_t Rm = opcode & 0xF;
-            val = processar_op2(opcode, Rm, Rs, flagC);
-        }
+    case 0x6:
+        resultado = R[Rn] - val - !Carry;
+        flagC = ((uint64_t)R[Rn] - (uint64_t)val - !Carry) <= UINT32_MAX;
+        flagV = ((R[Rn] ^ val) & (R[Rn] ^ resultado)) >> 31;
+        break;
 
-        std::cout << "[ALU] Valor do Operando 2 (val): 0x" << std::hex << val << std::dec << "\n";
+    case 0x7:
+        resultado = val - R[Rn] - !Carry;
+        flagC = ((uint64_t)val - (uint64_t)R[Rn] - !Carry) <= UINT32_MAX;
+        flagV = ((R[Rn] ^ val) & (val ^ resultado)) >> 31;
+        break;
 
-        uint32_t resultado;
-        bool escrever_rd = true;
+    case 0x8:
+        resultado = R[Rn] & val;
+        escrever_rd = false;
+        break;
 
-        std::cout << "[ALU] Executando operacao: 0x" << std::hex << +alu_op << std::dec << "...\n";
+    case 0x9:
+        resultado = R[Rn] ^ val;
+        escrever_rd = false;
+        break;
 
-        switch (alu_op)
-        {
-        case 0x0: // AND
-            resultado = R[Rn] & val;
-            break;
+    case 0xA:
+        resultado = R[Rn] - val;
+        escrever_rd = false;
+        flagC = (R[Rn] >= val);
+        flagV = ((R[Rn] ^ val) & (R[Rn] ^ resultado)) >> 31;
+        break;
 
-        case 0x1: // EOR
-            resultado = R[Rn] ^ val;
-            break;
+    case 0xB:
+        resultado = R[Rn] + val;
+        flagC = ((uint64_t)R[Rn] + (uint64_t)val) > UINT32_MAX;
+        flagV = ((R[Rn] ^ resultado) & (val ^ resultado)) >> 31;
+        escrever_rd = false;
+        break;
 
-        case 0x2: // SUB
-            resultado = R[Rn] - val;
-            flagC = (R[Rn] >= val);
-            flagV = ((R[Rn] ^ val) & (R[Rn] ^ resultado)) >> 31;
-            break;
+    case 0xC:
+        resultado = R[Rn] | val;
+        break;
 
-        case 0x3: // RSB
-            resultado = val - R[Rn];
-            flagC = (val >= R[Rn]);
-            flagV = ((R[Rn] ^ val) & (val ^ resultado)) >> 31;
-            break;
+    case 0xD:
+        resultado = val;
+        break;
 
-        case 0x4: // ADD
-            resultado = R[Rn] + val;
-            flagC = ((uint64_t)R[Rn] + (uint64_t)val) > UINT32_MAX;
-            flagV = ((R[Rn] ^ resultado) & (val ^ resultado)) >> 31;
-            break;
+    case 0xE:
+        resultado = R[Rn] & (~val);
+        break;
 
-        case 0x5: // ADC
-            resultado = R[Rn] + val + Carry;
-            flagC = ((uint64_t)R[Rn] + (uint64_t)val + Carry) > UINT32_MAX;
-            flagV = ((R[Rn] ^ resultado) & (val ^ resultado)) >> 31;
-            break;
+    case 0xF:
+        resultado = ~val;
+        break;
 
-        case 0x6: // SBC
-            resultado = R[Rn] - val - !Carry;
-            flagC = ((uint64_t)R[Rn] - (uint64_t)val - !Carry) <= UINT32_MAX;
-            flagV = ((R[Rn] ^ val) & (R[Rn] ^ resultado)) >> 31;
-            break;
-
-        case 0x7: // RSC
-            resultado = val - R[Rn] - !Carry;
-            flagC = ((uint64_t)val - (uint64_t)R[Rn] - !Carry) <= UINT32_MAX;
-            flagV = ((R[Rn] ^ val) & (val ^ resultado)) >> 31;
-            break;
-
-        case 0x8: // TST
-            resultado = R[Rn] & val;
-            escrever_rd = false;
-            break;
-
-        case 0x9: // TEQ
-            resultado = R[Rn] ^ val;
-            escrever_rd = false;
-            break;
-
-        case 0xA: // CMP
-            resultado = R[Rn] - val;
-            escrever_rd = false;
-            flagC = (R[Rn] >= val);
-            flagV = ((R[Rn] ^ val) & (R[Rn] ^ resultado)) >> 31;
-            break;
-
-        case 0xB: // CMN
-            resultado = R[Rn] + val;
-            flagC = ((uint64_t)R[Rn] + (uint64_t)val) > UINT32_MAX;
-            flagV = ((R[Rn] ^ resultado) & (val ^ resultado)) >> 31;
-            escrever_rd = false;
-            break;
-
-        case 0xC: // ORR
-            resultado = R[Rn] | val;
-            break;
-
-        case 0xD: // MOV
-            resultado = val;
-            break;
-
-        case 0xE: // BIC
-            resultado = R[Rn] & (~val);
-            break;
-
-        case 0xF: // MVN
-            resultado = ~val;
-            break;
-
-        default:
-            std::cout << "[ALU] AVISO: Operacao desconhecida!\n";
-            break;
-        }
-
-        std::cout << "[ALU] Resultado bruto: 0x" << std::hex << resultado << std::dec << "\n";
-
-        if (updateFlag)
-        {
-            flagN = resultado >> 31;
-            flagZ = resultado == 0;
-            set_bit(CPSR, 31, flagN);
-            set_bit(CPSR, 30, flagZ);
-            set_bit(CPSR, 29, flagC);
-            set_bit(CPSR, 28, flagV);
-
-            std::cout << "[ALU] Atualizando Flags (NZCV): ";
-            std::cout << "N=" << flagN << " Z=" << flagZ << " C=" << flagC << " V=" << flagV << "\n";
-        }
-        else
-        {
-            std::cout << "[ALU] Flags INTACTAS (S=0).\n";
-        }
-
-        if (escrever_rd)
-        {
-            R[Rd] = resultado;
-            std::cout << "[ALU] Gravou resultado em R[" << +Rd << "]\n";
-        }
-        else
-        {
-            std::cout << "[ALU] Resultado DESCARTADO (Instrucao de Teste)\n";
-        }
-        std::cout << "[ALU] =================================\n\n";
+    default:
+        break;
     }
-    void instrução_mul(uint32_t opcode)
+
+    if (updateFlag)
     {
-        bool updateFlag = (opcode >> 20) & 0x1;
+        flagN = resultado >> 31;
+        flagZ = resultado == 0;
+        set_bit(CPSR, 31, flagN);
+        set_bit(CPSR, 30, flagZ);
+        set_bit(CPSR, 29, flagC);
+        set_bit(CPSR, 28, flagV);
+    }
 
-        // Registradores
-        uint8_t Rd = (opcode >> 16) & 0xF;
-        uint8_t Rn = (opcode >> 12) & 0xF;
-        uint8_t Rs = (opcode >> 8) & 0xF;
-        uint8_t Rm = opcode & 0xF;
-        uint8_t RdHigh = Rd;
-        uint8_t RdLow = Rn;
-
-        // dados da multiplicação
-        uint8_t mulType = (opcode >> 4) & 0xF;
-        bool longFlag = (opcode >> 23) & 0x1;
-        bool signedFlag = ((opcode >> 22) & 0x1);
-        bool aculmulativo = (opcode >> 21) & 0x1;
-
-        uint32_t resultado = 0;
-        uint32_t resultadoLow = 0;
-        if (longFlag)
-        {
-            if (RdHigh == RdLow || RdHigh == Rm || RdLow == Rm || RdHigh == 15 || RdLow == 15 || Rm == 15 || Rs == 15)
-            {
-                std::cout << "[MUL] [ERRO] Uso invalido dos registradores para mutiplicação!\n";
-                return;
-            }
-            // multiplicação de 64 bits
-            uint64_t buffer_result = 0;
-            if (aculmulativo)
-            {
-                uint64_t Rd_64 = ((uint64_t)R[RdHigh] << 32) | R[RdLow];
-
-                if (signedFlag)
-                {
-                    buffer_result = ((int64_t)(int32_t)R[Rm] * (int64_t)(int32_t)R[Rs]) + (int64_t)Rd_64;
-                }
-                else
-                {
-                    buffer_result = ((uint64_t)R[Rm] * (uint64_t)R[Rs]) + Rd_64;
-                }
-            }
-            else
-            {
-                if (signedFlag)
-                {
-                    buffer_result = (int64_t)((int32_t)R[Rm] * (int64_t)(int32_t)R[Rs]);
-                }
-                else
-                {
-                    buffer_result = ((uint64_t)R[Rm] * (uint64_t)R[Rs]);
-                }
-            }
-            resultado = (buffer_result >> 32) & UINT32_MAX;
-            resultadoLow = (buffer_result)&UINT32_MAX;
-            R[RdLow] = resultadoLow;
-        }
-        else
-        {
-            if (Rd == Rm || Rd == 15 || Rm == 15 || Rs == 15 || Rn == 15)
-            {
-                std::cout << "[MUL] [ERRO] Uso invalido dos registradores para mutiplicação!\n";
-                return;
-            }
-            if (aculmulativo)
-            {
-                resultado = R[Rm] * R[Rs] + R[Rn];
-            }
-            else
-            {
-                resultado = R[Rm] * R[Rs];
-            }
-        }
-
-        if (updateFlag)
-        {
-            set_bit(CPSR, 31, get_bit(resultado, 31));
-            set_bit(CPSR, 30, (resultado == 0 && resultadoLow == 0));
-        }
-
+    if (escrever_rd)
+    {
         R[Rd] = resultado;
     }
-    void instrução_branch(uint32_t opcode)
+}
+void Cpu::instrução_mul(uint32_t opcode)
+{
+    bool updateFlag = (opcode >> 20) & 0x1;
+
+    uint8_t Rd = (opcode >> 16) & 0xF;
+    uint8_t Rn = (opcode >> 12) & 0xF;
+    uint8_t Rs = (opcode >> 8) & 0xF;
+    uint8_t Rm = opcode & 0xF;
+    uint8_t RdHigh = Rd;
+    uint8_t RdLow = Rn;
+
+    uint8_t mulType = (opcode >> 4) & 0xF;
+    bool longFlag = (opcode >> 23) & 0x1;
+    bool signedFlag = ((opcode >> 22) & 0x1);
+    bool aculmulativo = (opcode >> 21) & 0x1;
+
+    uint32_t resultado = 0;
+    uint32_t resultadoLow = 0;
+    if (longFlag)
     {
-        bool linkBranch = (opcode >> 24) & 0x1;
-
-        int32_t offset = (static_cast<int32_t>(opcode & 0x00FFFFFF) << 8) >> 6;
-
-        if (linkBranch)
+        if (RdHigh == RdLow || RdHigh == Rm || RdLow == Rm || RdHigh == 15 || RdLow == 15 || Rm == 15 || Rs == 15)
         {
-            R[14] = R[15] - 4;
+            return;
         }
-        R[15] = static_cast<uint32_t>(static_cast<int32_t>(R[15]) + offset);
+
+        uint64_t buffer_result = 0;
+        if (aculmulativo)
+        {
+            uint64_t Rd_64 = ((uint64_t)R[RdHigh] << 32) | R[RdLow];
+
+            if (signedFlag)
+            {
+                buffer_result = ((int64_t)(int32_t)R[Rm] * (int64_t)(int32_t)R[Rs]) + (int64_t)Rd_64;
+            }
+            else
+            {
+                buffer_result = ((uint64_t)R[Rm] * (uint64_t)R[Rs]) + Rd_64;
+            }
+        }
+        else
+        {
+            if (signedFlag)
+            {
+                buffer_result = (int64_t)((int32_t)R[Rm] * (int64_t)(int32_t)R[Rs]);
+            }
+            else
+            {
+                buffer_result = ((uint64_t)R[Rm] * (uint64_t)R[Rs]);
+            }
+        }
+        resultado = (buffer_result >> 32) & UINT32_MAX;
+        resultadoLow = (buffer_result)&UINT32_MAX;
+        R[RdLow] = resultadoLow;
     }
-    void instrução_bx(uint32_t opcode)
+    else
+    {
+        if (Rd == Rm || Rd == 15 || Rm == 15 || Rs == 15 || Rn == 15)
+        {
+            return;
+        }
+        if (aculmulativo)
+        {
+            resultado = R[Rm] * R[Rs] + R[Rn];
+        }
+        else
+        {
+            resultado = R[Rm] * R[Rs];
+        }
+    }
+
+    if (updateFlag)
+    {
+        set_bit(CPSR, 31, get_bit(resultado, 31));
+        set_bit(CPSR, 30, (resultado == 0 && resultadoLow == 0));
+    }
+
+    R[Rd] = resultado;
+}
+void Cpu::instrução_branch(uint32_t opcode)
+{
+    bool linkBranch = (opcode >> 24) & 0x1;
+
+    int32_t offset = (static_cast<int32_t>(opcode & 0x00FFFFFF) << 8) >> 6;
+
+    if (linkBranch)
+    {
+        R[14] = R[15] - 4;
+    }
+    R[15] = static_cast<uint32_t>(static_cast<int32_t>(R[15]) + offset);
+}
+void Cpu::instrução_bx(uint32_t opcode)
+{
+    uint8_t Rm = opcode & 0xF;
+    uint32_t address = R[Rm];
+
+    bool modoThumb = address & 0x1;
+    set_bit(CPSR, 5, modoThumb);
+
+    if (modoThumb)
+    {
+        R[15] = address & (~(uint32_t)1);
+    }
+    else
+    {
+        R[15] = address & (~(uint32_t)3);
+    }
+}
+void Cpu::instrução_msr(uint32_t opcode)
+{
+    bool imediato = (opcode >> 25) & 0x1;
+
+    bool spsrFlag = (opcode >> 22) & 0x1;
+    uint32_t *endereçoPSR = &CPSR;
+    uint32_t programState = 0;
+
+    uint32_t fields = (opcode >> 16) & 0xF;
+    uint32_t mask = 0;
+    if (get_bit(fields, 0) & 0x1)
+    {
+        mask |= 0x000000FF;
+    }
+    if (get_bit(fields, 1) & 0x1)
+    {
+        mask |= 0x0000FF00;
+    }
+    if (get_bit(fields, 2) & 0x1)
+    {
+        mask |= 0x00FF0000;
+    }
+    if (get_bit(fields, 3) & 0x1)
+    {
+        mask |= 0xFF000000;
+    }
+    uint8_t modeBits = CPSR & 0x1F;
+
+    if (modeBits == 0b10000)
+    {
+        mask &= 0xFF000000;
+    }
+
+    if (spsrFlag)
+    {
+        switch (modeBits)
+        {
+        case 0b10000:
+        case 0b11111:
+        case 0b10001:
+            return;
+
+        case 0b10010:
+            endereçoPSR = &SPSR_irq;
+            break;
+
+        case 0b10011:
+            endereçoPSR = &SPSR_swi;
+            break;
+
+        case 0b10111:
+            endereçoPSR = &SPSR_abt;
+            break;
+
+        case 0b11011:
+            endereçoPSR = &SPSR_und;
+            break;
+
+        default:
+            return;
+        }
+    }
+
+    if (imediato)
+    {
+        uint32_t nn = opcode & 0xFF;
+        uint8_t rorCount = ((opcode >> 8) & 0xF) * 2;
+
+        programState = std::rotr(nn, rorCount);
+    }
+    else
     {
         uint8_t Rm = opcode & 0xF;
-        uint32_t address = R[Rm];
-
-        bool modoThumb = address & 0x1;
-        set_bit(CPSR, 5, modoThumb);
-
-        if (modoThumb)
-        {
-            R[15] = address & (~(uint32_t)1);
-        }
-        else
-        {
-            R[15] = address & (~(uint32_t)3);
-        }
+        programState = R[Rm];
     }
-    void instrução_msr(uint32_t opcode)
+
+    *endereçoPSR = (*endereçoPSR & ~mask) | (programState & mask);
+}
+void Cpu::instrução_mrs(uint32_t opcode)
+{
+    uint8_t Rd = (opcode >> 12) & 0xF;
+
+    bool spsrFlag = (opcode >> 22) & 0x1;
+    uint32_t *endereçoPSR = &CPSR;
+
+    if (spsrFlag)
     {
-        bool imediato = (opcode >> 25) & 0x1;
-
-        bool spsrFlag = (opcode >> 22) & 0x1;
-        uint32_t *endereçoPSR = &CPSR;
-        uint32_t programState = 0;
-
-        uint32_t fields = (opcode >> 16) & 0xF;
-        uint32_t mask = 0;
-        if (get_bit(fields, 0) & 0x1)
-        {
-            // Campo 'c'
-            mask |= 0x000000FF;
-        }
-        if (get_bit(fields, 1) & 0x1)
-        {
-            // Campo 'x'
-            mask |= 0x0000FF00;
-        }
-        if (get_bit(fields, 2) & 0x1)
-        {
-            // Campo 's'
-            mask |= 0x00FF0000;
-        }
-        if (get_bit(fields, 3) & 0x1)
-        {
-            // Campo 'f'
-            mask |= 0xFF000000;
-        }
         uint8_t modeBits = CPSR & 0x1F;
-
-        if (modeBits == 0b10000)
+        switch (modeBits)
         {
-            mask &= 0xFF000000;
+        case 0b10000:
+        case 0b11111:
+        case 0b10001:
+            return;
+
+        case 0b10010:
+            endereçoPSR = &SPSR_irq;
+            break;
+
+        case 0b10011:
+            endereçoPSR = &SPSR_swi;
+            break;
+
+        case 0b10111:
+            endereçoPSR = &SPSR_abt;
+            break;
+
+        case 0b11011:
+            endereçoPSR = &SPSR_und;
+            break;
+
+        default:
+            return;
         }
+    }
 
-        if (spsrFlag)
+    R[Rd] = *endereçoPSR;
+}
+void Cpu::instrução_sdt(uint32_t opcode)
+{
+    bool imediato = (opcode >> 25) & 0x1;
+    bool preIndex = (opcode >> 24) & 0x1;
+    bool upDown = (opcode >> 23) & 0x1;
+    bool wordByte = (opcode >> 22) & 0x1;
+    bool writeBack = (opcode >> 21) & 0x1;
+    bool loadStore = (opcode >> 20) & 0x1;
+
+    uint8_t Rd = (opcode >> 12) & 0xF;
+    uint8_t Rn = (opcode >> 16) & 0xF;
+
+    uint32_t offset = 0;
+    if (imediato)
+    {
+        uint8_t Rm = opcode & 0xF;
+        uint8_t shiftType = (opcode >> 5) & 0b11;
+        uint8_t shiftCount = (opcode >> 7) & 0x1F;
+
+        OpResult op2 = shift_barrier(shiftType, R[Rm], shiftCount, true, get_bit(CPSR, 29));
+
+        offset = op2.valor;
+    }
+    else
+    {
+        offset = opcode & 0xFFF;
+    }
+
+    uint32_t endereço = R[Rn];
+    if (preIndex)
+    {
+        endereço = (upDown) ? R[Rn] + offset : R[Rn] - offset;
+    }
+
+    if (loadStore)
+    {
+        OpResult status;
+        if (wordByte)
         {
-            switch (modeBits)
+            status = memoria->get8(endereço);
+        }
+        else
+        {
+            status = memoria->get32(endereço);
+            uint8_t desalinhamentoEmBits = (endereço & 0b11) * 8;
+            status.valor = std::rotr(status.valor, desalinhamentoEmBits);
+        }
+        if (status.sucesso)
+        {
+            R[Rd] = status.valor;
+        }
+    }
+    else
+    {
+        if (wordByte)
+        {
+            memoria->set8(endereço, R[Rd] & 0xFF);
+        }
+        else
+        {
+            memoria->set32(endereço, R[Rd]);
+        }
+    }
+
+    if (writeBack || !preIndex)
+    {
+        if (!loadStore || (Rd != Rn))
+        {
+            R[Rn] = (upDown) ? R[Rn] + offset : R[Rn] - offset;
+        }
+    }
+}
+void Cpu::instrução_hw_s(uint32_t opcode)
+{
+    bool preIndex = (opcode >> 24) & 0x1;
+    bool upDown = (opcode >> 23) & 0x1;
+    bool imediato = !((opcode >> 22) & 0x1);
+    bool writeBack = (opcode >> 21) & 0x1;
+    bool loadStore = (opcode >> 20) & 0x1;
+    bool signed_ = (opcode >> 6) & 0x1;
+    bool halfword = (opcode >> 5) & 0x1;
+
+    uint8_t offsetHigh = (opcode >> 8) & 0xF;
+    uint8_t offsetLow = opcode & 0xF;
+
+    uint8_t Rn = (opcode >> 16) & 0xF;
+    uint8_t Rm = offsetLow;
+    uint8_t Rd = (opcode >> 12) & 0xF;
+
+    uint32_t offset = (offsetHigh << 4) | offsetLow;
+    uint32_t endereço = R[Rn];
+
+    if (imediato)
+    {
+        offset = R[Rm];
+    }
+    if (preIndex)
+    {
+        endereço = (upDown) ? R[Rn] + offset : R[Rn] - offset;
+    }
+
+    if (loadStore)
+    {
+        if (halfword)
+        {
+            OpResult status = memoria->get16(endereço);
+            if (status.sucesso)
             {
-            case 0b10000: // Modo User
-            case 0b11111: // Modo System
-            case 0b10001: // Modo FIQ
-                return;   // Não possuem SPSR acessível / ignorado no GBA
-
-            case 0b10010: // Modo IRQ
-                endereçoPSR = &SPSR_irq;
-                break;
-
-            case 0b10011: // Modo SWI / Supervisor
-                endereçoPSR = &SPSR_swi;
-                break;
-
-            case 0b10111: // Modo Abort
-                endereçoPSR = &SPSR_abt;
-                break;
-
-            case 0b11011: // Modo Undefined
-                endereçoPSR = &SPSR_und;
-                break;
-
-            default:
-                std::cout << "[DEBUG] Caiu no default! modeBits era: 0x" << std::hex << (int)modeBits << "\n";
-                return;
+                uint32_t resultado = status.valor;
+                if (signed_)
+                {
+                    resultado |= (((get_bit(status.valor, 15)) ? 0xFFFF : 0x00) << 16);
+                }
+                R[Rd] = resultado;
             }
         }
-
-        if (imediato)
-        {
-            uint32_t nn = opcode & 0xFF;
-            uint8_t rorCount = ((opcode >> 8) & 0xF) * 2;
-
-            programState = std::rotr(nn, rorCount);
-        }
         else
         {
-            uint8_t Rm = opcode & 0xF;
-            programState = R[Rm];
-        }
-
-        std::cout << "[DEBUG] programState: 0x" << std::hex << programState << " | mask: 0x" << mask << "\n";
-
-        *endereçoPSR = (*endereçoPSR & ~mask) | (programState & mask);
-    }
-    void instrução_mrs(uint32_t opcode)
-    {
-        uint8_t Rd = (opcode >> 12) & 0xF;
-
-        bool spsrFlag = (opcode >> 22) & 0x1;
-        uint32_t *endereçoPSR = &CPSR;
-
-        if (spsrFlag)
-        {
-            uint8_t modeBits = CPSR & 0x1F;
-            switch (modeBits)
+            OpResult status = memoria->get8(endereço);
+            if (status.sucesso)
             {
-            case 0b10000: // Modo User
-            case 0b11111: // Modo System
-            case 0b10001: // Modo FIQ
-                return;   // Não possuem SPSR acessível / ignorado no GBA
-
-            case 0b10010: // Modo IRQ
-                endereçoPSR = &SPSR_irq;
-                break;
-
-            case 0b10011: // Modo SWI / Supervisor
-                endereçoPSR = &SPSR_swi;
-                break;
-
-            case 0b10111: // Modo Abort
-                endereçoPSR = &SPSR_abt;
-                break;
-
-            case 0b11011: // Modo Undefined
-                endereçoPSR = &SPSR_und;
-                break;
-
-            default:
-                return;
+                uint32_t resultado = status.valor;
+                if (signed_)
+                {
+                    resultado |= (((get_bit(status.valor, 7)) ? 0xFFFFFF : 0x00) << 8);
+                }
+                R[Rd] = resultado;
             }
         }
-
-        R[Rd] = *endereçoPSR;
     }
-
-public:
-    Cpu() = default;
-    ~Cpu() = default;
-
-    void set_r(uint8_t index, uint32_t value)
+    else
     {
-        if (index < 16)
+        if (halfword)
         {
-            R[index] = value;
+            memoria->set16(endereço, R[Rd] & 0xFFFF);
         }
         else
         {
-            std::cerr << "Erro: Indice de registrador invalido (" << static_cast<int>(index) << ")\n";
+            memoria->set8(endereço, R[Rd] & 0xFF);
         }
     }
-    uint32_t get_r(uint8_t index)
+
+    if (writeBack || !preIndex)
     {
-        if (index < 16)
+        if (!loadStore || (Rd != Rn))
         {
-            return R[index];
-        }
-        else
-        {
-            std::cout << "Erro d eindex no lerR\n";
-            return 0;
+            R[Rn] = (upDown) ? R[Rn] + offset : R[Rn] - offset;
         }
     }
-    uint32_t getCPSR()
+}
+
+void Cpu::set_r(uint8_t index, uint32_t value)
+{
+    if (index < 16)
     {
-        return CPSR;
+        R[index] = value;
     }
-    void setCPSR(uint32_t value)
+    else if (index == 16)
     {
         CPSR = value;
     }
-    uint32_t getSPSR_irq()
-    {
-        return SPSR_irq;
-    }
-
-    void debugar_alu(uint32_t opcode)
-    {
-        instrução_alu(opcode);
-    }
-    void debugar_mul(uint32_t opcode)
-    {
-        instrução_mul(opcode);
-    }
-    void debugar_branch(uint32_t opcode)
-    {
-        instrução_branch(opcode);
-    }
-    void debugar_bx(uint32_t opcode)
-    {
-        instrução_bx(opcode);
-    }
-    void debugar_mrs(uint32_t opcode)
-    {
-        instrução_mrs(opcode);
-    }
-    void debugar_msr(uint32_t opcode)
-    {
-        instrução_msr(opcode);
-    }
-};
-
-void print_hex(const std::string &label, uint32_t val)
-{
-    std::cout << label << ": 0x"
-              << std::uppercase << std::setfill('0') << std::setw(8)
-              << std::hex << val << std::dec << "\n";
 }
-
-int main()
+uint32_t Cpu::get_r(uint8_t index)
 {
-    Cpu cpu;
+    return SPSR_irq;
+}
+void Cpu::step()
+{
+    // 1. FETCH
+    OpResult result = memoria->get32(R[15]);
+    uint32_t opcode = result.result;
+    uint32_t pc_atual = R[15];
+    R[15] += 4; // O PC avança 4 bytes no estado ARM (32 bits)
 
-    std::cout << "========================================\n";
-    std::cout << "         TESTANDO MRS E MSR             \n";
-    std::cout << "========================================\n\n";
+    // 2. CHECK CONDITION (Bits 31..28)
+    uint8_t cond = (opcode >> 28) & 0xF;
+    if (false) // imagina que verifica se a função bate com a condição ou n
+    {
+        return; // Instrução descartada se a condição der falsa
+    }
 
-    // ----------------------------------------------------
-    // [1] Teste MRS: Ler CPSR para R0
-    // ----------------------------------------------------
-    cpu.setCPSR(0x60000010);          // Define CPSR com flags e modo User (0x10)
-    uint32_t opcode_mrs = 0xE10F0000; // MRS R0, CPSR
+    // 3. DECODE & DISPATCH (Bits 27..25)
+    uint8_t grupo = (opcode >> 25) & 0x7;
 
-    cpu.debugar_mrs(opcode_mrs);
+    switch (grupo)
+    {
+    case 0b000:
+    {
+        // Checa a assinatura dos bits 7 e 4 (Ambos precisam ser 1)
+        if (((opcode >> 7) & 1) && ((opcode >> 4) & 1))
+        {
+            uint8_t sh = (opcode >> 5) & 0x3; // Bits 6..5 (S e H)
 
-    std::cout << "--- [1] Teste MRS (CPSR -> R0) ---\n";
-    std::cout << "CPSR configurado : 0x" << std::hex << 0x60000010 << "\n";
-    std::cout << "R0 apos MRS      : 0x" << std::hex << cpu.get_r(0) << "\n\n";
+            if (sh != 0)
+            {
+                // [TransImm10 / TransReg10] Halfword e Signed Data Transfer
+                // Instruções: LDRH, STRH, LDRSB, LDRSH
+                // (Sua função: executar_ldr_str_extra)
+            }
+            else
+            {
+                // Bits 6..5 == 00 (Multiplicações, Swaps e Exclusivos)
+                uint8_t op_mul = (opcode >> 20) & 0xFF; // Bits 27..20
 
-    // ----------------------------------------------------
-    // [2] Teste MSR: Alterar flags do CPSR via Registrador (R1 -> CPSR_f)
-    // ----------------------------------------------------
-    cpu.setCPSR(0x00000013);              // Modo Supervisor (SVC / 0x13)
-    cpu.set_r(1, 0xF0000000);             // R1 com flags N, Z, C, V ativas
-    uint32_t opcode_msr_reg = 0xE128F001; // MSR CPSR_f, R1
+                if ((op_mul & 0xFC) == 0x00)
+                {
+                    // [Multiply] MUL, MLA (Multiplicação simples de 32 bits)
+                }
+                else if (op_mul == 0x04)
+                {
+                    // [ARM11: UMAAL] Unsigned Multiply Accumulate Accumulate Long
+                }
+                else if ((op_mul & 0xF8) == 0x08)
+                {
+                    // [MulLong] UMULL, UMLAL, SMULL, SMLAL (Multiplicação de 64 bits)
+                }
+                else if ((op_mul & 0xFB) == 0x10 && ((opcode >> 4) & 0xF) == 0x9)
+                {
+                    // [TransSwp12] SWP, SWPB (Atomic Swap de memória)
+                }
+                else if ((op_mul & 0xF8) == 0x18 && ((opcode >> 4) & 0xF) == 0x9)
+                {
+                    // [ARM11: LDREX / STREX] Leitura/Escrita exclusiva
+                }
+                else
+                {
+                    // Opcode reservado / Não mapeado neste subgrupo
+                }
+            }
+        }
+        else
+        {
+            // Bits 7 e 4 NÃO são ambos '1'
+            // Checa instruções de status, desvios por registrador e DSP
+            uint8_t op_misc = (opcode >> 20) & 0x1F; // Bits 24..20
 
-    cpu.debugar_msr(opcode_msr_reg);
+            if ((op_misc & 0x19) == 0x10) // Padrão bits 24..20 == 10x00
+            {
+                uint8_t bits_11_4 = (opcode >> 4) & 0xFF;
 
-    std::cout << "--- [2] Teste MSR Reg (R1 -> CPSR_f) ---\n";
-    std::cout << "CPSR esperado    : 0xF0000013\n";
-    std::cout << "CPSR apos MSR    : 0x" << std::hex << cpu.getCPSR() << "\n\n";
+                if ((bits_11_4 & 0x0F) == 0x0)
+                {
+                    // [PSR Reg] MRS (Ler Status) ou MSR (Escrever Status via Registrador)
+                }
+                else if (bits_11_4 == 0x11)
+                {
+                    // [BX / BLX] Branch and Exchange (Troca para THUMB / Salto por registrador)
+                }
+                else if (bits_11_4 == 0x31)
+                {
+                    // [BLX] Branch with Link and Exchange (Registrador)
+                }
+                else if ((bits_11_4 & 0xF0) == 0x70 && (bits_11_4 & 0x0F) == 0x1)
+                {
+                    // [ARM9: BKPT] Breakpoint de Software
+                }
+                else if (bits_11_4 == 0x15)
+                {
+                    // [ARM9: CLZ] Count Leading Zeros
+                }
+                else if ((bits_11_4 & 0x0F) == 0x5)
+                {
+                    // [ARM9: QALU] Operações de Aritmética Saturada (QADD, QSUB, etc.)
+                }
+                else if ((bits_11_4 & 0x09) == 0x08)
+                {
+                    // [MulHalfARM9] Multiplicações DSP de 16 bits (SMLAxy, SMULxy)
+                }
+                else
+                {
+                    // [DataProc] ALU com operando vindo de registrador com Shift
+                    // (Sua função: executar_alu)
+                }
+            }
+            else
+            {
+                // [DataProc] ALU Padrão: AND, EOR, SUB, RSB, ADD, ADC, SBC, RSC, TST, TEQ, CMP, CMN, ORR, MOV, BIC, MVN
+                // Operando 2 vem de Registrador (com deslocamento por constante ou registrador)
+                // (Sua função: executar_alu)
+            }
+        }
+        break;
+    }
 
-    // ----------------------------------------------------
-    // [3] Teste MSR: Alterar SPSR_irq via Imediato
-    // ----------------------------------------------------
-    cpu.setCPSR(0x00000012);              // Entra no modo IRQ (0x12)
-    uint32_t opcode_msr_imm = 0xE368F480; // MSR SPSR_f, #0x80000000 (imm 0x80, rot 0)
+    case 0b001:
+    {
+        uint8_t op_misc = (opcode >> 20) & 0x1F; // Bits 24..20
 
-    cpu.debugar_msr(opcode_msr_imm);
+        if (op_misc == 0x12 || op_misc == 0x16) // Bits 24..20 = 10010 ou 10110
+        {
+            // [PSR Imm] MSR (Escrever no PSR com valor Imediato rotacionado)
+        }
+        else if ((opcode & 0x0FFFFFFF) == 0x0320F000)
+        {
+            // [ARM11: Hint] NOP, YIELD, WFE, WFI, SEV
+        }
+        else
+        {
+            // [DataProc] ALU Padrão com Operando 2 Imediato de 8 bits rotacionado
+            // (Sua função: executar_alu)
+        }
+        break;
+    }
 
-    std::cout << "--- [3] Teste MSR Imm (Imediato -> SPSR_irq) ---\n";
-    std::cout << "SPSR_irq esperado: 0x80000000\n";
-    std::cout << "SPSR_irq apos MSR: 0x" << std::hex << cpu.getSPSR_irq() << "\n";
+    case 0b010:
+    {
+        // [TransImm9] Single Data Transfer: LDR, STR, LDRB, STRB
+        // Offset Imediato de 12 bits
+        // (Sua função: executar_ldr_str_simples)
+        break;
+    }
+
+    case 0b011:
+    {
+        bool bit4 = (opcode >> 4) & 1;
+        if (!bit4)
+        {
+            // [TransReg9] Single Data Transfer: LDR, STR, LDRB, STRB
+            // Offset de Registrador com Barrel Shifter
+            // (Sua função: executar_ldr_str_simples)
+        }
+        else
+        {
+            // [Undefined / ARM11: Media] Instrução Indefinida na arquitetura ARMv4/v5
+        }
+        break;
+    }
+
+    case 0b100:
+    {
+        // [BlockTrans] Block Data Transfer: LDM, STM
+        // Carregar / Salvar múltiplos registradores de uma vez
+        break;
+    }
+
+    case 0b101:
+    {
+        // [B, BL, BLX] Desvios de código com Offset Imediato de 24 bits
+        break;
+    }
+
+    case 0b110:
+    {
+        // [CoDataTrans / CoRR] Transferências de dados de Coprocessador (LDC, STC)
+        break;
+    }
+
+    case 0b111:
+    {
+        bool bit24 = (opcode >> 24) & 1;
+        if (bit24)
+        {
+            // [SWI / SVC] Software Interrupt (Interrupção de software / Call da BIOS)
+        }
+        else
+        {
+            bool bit4 = (opcode >> 4) & 1;
+            if (!bit4)
+            {
+                // [CoDataOp] Operações Internas de Coprocessador (CDP)
+            }
+            else
+            {
+                // [CoRegTrans] Transferência Registrador-Coprocessador (MCR, MRC)
+            }
+        }
+        break;
+    }
+
+    default:
+    {
+        std::cout << "[ERRO] Opcode nao reconhecido: 0x" << std::hex << opcode
+                  << " no PC: 0x" << pc_atual << std::dec << "\n";
+        break;
+    }
+    }
 }

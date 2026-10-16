@@ -1,6 +1,6 @@
 #include "memoria.hpp"
 
-endereçoFisico Memoria::resolver_endereço(uint32_t endereço)
+physicalAddr Mem::resolve_addr(uint32_t endereço)
 {
     uint8_t seção = (endereço >> 24) & 0xFF;
 
@@ -41,9 +41,9 @@ endereçoFisico Memoria::resolver_endereço(uint32_t endereço)
 }
 
 // Funções de Leitura
-memReturnStatus Memoria::get8(uint32_t endereço)
+OpResult Mem::get8(uint32_t endereço)
 {
-    endereçoFisico addr = resolver_endereço(endereço);
+    physicalAddr addr = resolve_addr(endereço);
     if (!addr.ponteiro)
         return {0, 0, false};
 
@@ -57,9 +57,9 @@ memReturnStatus Memoria::get8(uint32_t endereço)
 
     return {addr.ponteiro[addr.endereçoMascarado], ciclos, true};
 }
-memReturnStatus Memoria::get16(uint32_t endereço)
+OpResult Mem::get16(uint32_t endereço)
 {
-    endereçoFisico addr = resolver_endereço(endereço);
+    physicalAddr addr = resolve_addr(endereço);
     if (!addr.ponteiro)
         return {0, 0, false};
 
@@ -81,9 +81,9 @@ memReturnStatus Memoria::get16(uint32_t endereço)
     uint16_t valor = addr.ponteiro[base] | (addr.ponteiro[base + 1] << 8);
     return {valor, ciclos, true};
 }
-memReturnStatus Memoria::get32(uint32_t endereço)
+OpResult Mem::get32(uint32_t endereço)
 {
-    endereçoFisico addr = resolver_endereço(endereço);
+    physicalAddr addr = resolve_addr(endereço);
     if (!addr.ponteiro)
         return {0, 0, false};
 
@@ -112,9 +112,9 @@ memReturnStatus Memoria::get32(uint32_t endereço)
 }
 
 // Funções de Escrita
-void Memoria::set8(uint32_t endereço, uint8_t valor)
+void Mem::set8(uint32_t endereço, uint8_t valor)
 {
-    endereçoFisico addr = resolver_endereço(endereço);
+    physicalAddr addr = resolve_addr(endereço);
     if (!addr.ponteiro)
         return;
 
@@ -132,9 +132,9 @@ void Memoria::set8(uint32_t endereço, uint8_t valor)
 
     addr.ponteiro[addr.endereçoMascarado] = valor;
 }
-void Memoria::set16(uint32_t endereço, uint16_t valor)
+void Mem::set16(uint32_t endereço, uint16_t valor)
 {
-    endereçoFisico addr = resolver_endereço(endereço);
+    physicalAddr addr = resolve_addr(endereço);
     if (!addr.ponteiro)
         return;
 
@@ -152,9 +152,9 @@ void Memoria::set16(uint32_t endereço, uint16_t valor)
     addr.ponteiro[base] = valor & 0xFF;
     addr.ponteiro[base + 1] = (valor >> 8) & 0xFF;
 }
-void Memoria::set32(uint32_t endereço, uint32_t valor)
+void Mem::set32(uint32_t endereço, uint32_t valor)
 {
-    endereçoFisico addr = resolver_endereço(endereço);
+    physicalAddr addr = resolve_addr(endereço);
     if (!addr.ponteiro)
         return;
 
