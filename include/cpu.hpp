@@ -28,14 +28,16 @@ private:
     Mem *memoria = nullptr;
 
     OpResult shift_barrier(uint32_t shiftType, uint32_t valor, uint8_t count, bool origemImediato, bool flagC);
-    void instrução_alu(uint32_t opcode);
-    void instrução_mul(uint32_t opcode);
-    void instrução_branch(uint32_t opcode);
-    void instrução_bx(uint32_t opcode);
-    void instrução_msr(uint32_t opcode);
-    void instrução_mrs(uint32_t opcode);
-    void instrução_sdt(uint32_t opcode);
-    void instrução_hw_s(uint32_t opcode);
+    bool checar_condicao(uint32_t opcode);
+
+    void alu(uint32_t opcode);
+    void mul(uint32_t opcode);
+    void branch(uint32_t opcode);
+    void blx(uint32_t opcode);
+    void msr(uint32_t opcode);
+    void mrs(uint32_t opcode);
+    void sdt(uint32_t opcode);
+    void hw_s(uint32_t opcode);
 
 public:
     Cpu(Mem *mem);

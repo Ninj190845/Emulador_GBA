@@ -2,9 +2,10 @@
 *.o
 *.out
 *.exe
-*.debug
+
 build/
 bin/
+logs/
 
 # Configurações de IDEs (VS Code, CLion, etc.)
 .vscode/
