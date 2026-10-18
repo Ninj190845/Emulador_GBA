@@ -261,43 +261,106 @@ OpResult Mem::get32(uint32_t endereço)
 // Funções de Escrita
 void Mem::set8(uint32_t endereço, uint8_t valor)
 {
+    logFileMem << get_indent_mem() << "[Mem::set8] {\n";
+    indent_levelMem++;
+
+    logFileMem << get_indent_mem() << "Endereço Solicitado: 0x" << std::hex << endereço << std::dec << "\n";
+    logFileMem << get_indent_mem() << "Valor para Escrita: 0x" << std::hex << static_cast<uint32_t>(valor)
+               << " (" << std::dec << static_cast<uint32_t>(valor) << ")\n";
+
     physicalAddr addr = resolve_addr(endereço);
     if (!addr.ponteiro)
+    {
+        logFileMem << get_indent_mem() << "Escrita Cancelada: Ponteiro Inválido\n";
+        indent_levelMem--;
+        logFileMem << get_indent_mem() << "}\n";
         return;
+    }
 
     uint8_t seção = (endereço >> 24) & 0xFF;
+    logFileMem << get_indent_mem() << "Seção: 0x" << std::hex << static_cast<uint32_t>(seção) << std::dec << "\n";
+
     if (seção == 0x00 || (seção >= 0x08 && seção <= 0x0D) || seção == 0x07)
+    {
+        logFileMem << get_indent_mem() << "Escrita Ignorada (Seção Protegida ou Somente Leitura)\n";
+        indent_levelMem--;
+        logFileMem << get_indent_mem() << "}\n";
         return;
+    }
 
     if (seção == 0x05 || seção == 0x06)
     {
         uint32_t base = addr.endereçoMascarado & ~1;
+        logFileMem << get_indent_mem() << "Endereço Mascarado: 0x" << std::hex << addr.endereçoMascarado << std::dec << "\n";
+        logFileMem << get_indent_mem() << "Base Alinhada (16-bit): 0x" << std::hex << base << std::dec << "\n";
+
         addr.ponteiro[base] = valor;
         addr.ponteiro[base + 1] = valor;
+
+        logFileMem << get_indent_mem() << "Escrita Realizada com Sucesso (Duplicada em 16-bit)\n";
+        indent_levelMem--;
+        logFileMem << get_indent_mem() << "}\n";
         return;
     }
 
+    logFileMem << get_indent_mem() << "Endereço Mascarado: 0x" << std::hex << addr.endereçoMascarado << std::dec << "\n";
     addr.ponteiro[addr.endereçoMascarado] = valor;
+
+    logFileMem << get_indent_mem() << "Escrita Realizada com Sucesso\n";
+    indent_levelMem--;
+    logFileMem << get_indent_mem() << "}\n";
 }
 void Mem::set16(uint32_t endereço, uint16_t valor)
 {
+    logFileMem << get_indent_mem() << "[Mem::set16] {\n";
+    indent_levelMem++;
+
+    logFileMem << get_indent_mem() << "Endereço Solicitado: 0x" << std::hex << endereço << std::dec << "\n";
+    logFileMem << get_indent_mem() << "Valor para Escrita: 0x" << std::hex << static_cast<uint32_t>(valor)
+               << " (" << std::dec << static_cast<uint32_t>(valor) << ")\n";
+
     physicalAddr addr = resolve_addr(endereço);
     if (!addr.ponteiro)
+    {
+        logFileMem << get_indent_mem() << "Escrita Cancelada: Ponteiro Inválido\n";
+        indent_levelMem--;
+        logFileMem << get_indent_mem() << "}\n";
         return;
+    }
 
     uint8_t seção = (endereço >> 24) & 0xFF;
+    logFileMem << get_indent_mem() << "Seção: 0x" << std::hex << static_cast<uint32_t>(seção) << std::dec << "\n";
+
     if (seção == 0x00 || (seção >= 0x08 && seção <= 0x0D))
+    {
+        logFileMem << get_indent_mem() << "Escrita Ignorada (Seção Protegida ou Somente Leitura)\n";
+        indent_levelMem--;
+        logFileMem << get_indent_mem() << "}\n";
         return;
+    }
 
     if (seção >= 0x0E)
     {
+        logFileMem << get_indent_mem() << "Endereço Mascarado: 0x" << std::hex << addr.endereçoMascarado << std::dec << "\n";
+
         addr.ponteiro[addr.endereçoMascarado] = valor & 0xFF;
+
+        logFileMem << get_indent_mem() << "Escrita Realizada com Sucesso (8-bit / EEPROM-SRAM)\n";
+        indent_levelMem--;
+        logFileMem << get_indent_mem() << "}\n";
         return;
     }
 
     uint32_t base = addr.endereçoMascarado & ~1;
+    logFileMem << get_indent_mem() << "Endereço Mascarado: 0x" << std::hex << addr.endereçoMascarado << std::dec << "\n";
+    logFileMem << get_indent_mem() << "Base Alinhada (16-bit): 0x" << std::hex << base << std::dec << "\n";
+
     addr.ponteiro[base] = valor & 0xFF;
     addr.ponteiro[base + 1] = (valor >> 8) & 0xFF;
+
+    logFileMem << get_indent_mem() << "Escrita Realizada com Sucesso\n";
+    indent_levelMem--;
+    logFileMem << get_indent_mem() << "}\n";
 }
 void Mem::set32(uint32_t endereço, uint32_t valor)
 {

@@ -571,13 +571,13 @@ void Cpu::branch(uint32_t opcode)
     // Se for BL (Branch with Link), salva o endereço de retorno (próxima instrução)
     if (linkBranch)
     {
-        R[14] = R[15]; // R[15] já é pc_atual + 4
+        R[14] = R[15] - 4; // R[15] já é pc_atual + 4
         logFile << get_indent() << "LR (R14) salvo: 0x" << std::hex << R[14] << std::dec << "\n";
     }
 
     // O hardware ARM calcula o salto em relação a (PC_atual + 8)
     // Como R[15] vale (PC_atual + 4), somamos mais 4 para alinhar com o pipeline
-    R[15] = static_cast<uint32_t>(static_cast<int32_t>(R[15]) + 4 + offset);
+    R[15] += offset;
     logFile << get_indent() << "Novo PC (R15): 0x" << std::hex << R[15] << std::dec << "\n";
 
     indent_level--;
@@ -982,6 +982,144 @@ void Cpu::hw_s(uint32_t opcode)
     indent_level--;
     logFile << get_indent() << "}\n";
 }
+void Cpu::bdt(uint32_t opcode)
+{
+    logFile << get_indent() << "[BDT] {\n";
+    indent_level++;
+
+    bool preIndex = (opcode >> 24) & 0x1;
+    bool upDown = (opcode >> 23) & 0x1;
+    bool writeBack = (opcode >> 21) & 0x1;
+    bool loadStore = (opcode >> 20) & 0x1;
+
+    uint8_t Rn = (opcode >> 16) & 0xF;
+    uint16_t regList = opcode & 0xFFFF;
+
+    logFile << get_indent() << "Operação: " << (loadStore ? "LDM" : "STM") << "\n";
+    logFile << get_indent() << "Indexação: " << (preIndex ? "Pré-indexado" : "Pós-indexado") << "\n";
+    logFile << get_indent() << "Direção offset: " << (upDown ? "+" : "-") << "\n";
+    logFile << get_indent() << "Writeback: " << (writeBack ? "True" : "False") << "\n";
+    logFile << get_indent() << "R[" << (int)Rn << "] base: 0x" << std::hex << R[Rn] << std::dec << "\n";
+    logFile << get_indent() << "Lista de registradores: 0x" << std::hex << regList << std::dec << "\n";
+
+    // Aqui você pode implementar a lógica para LDM/STM conforme necessário
+
+    uint32_t start = 0;
+    if (upDown)
+    {
+        if (preIndex)
+        {
+            start = R[Rn] + 4;
+        }
+        else
+        {
+            start = R[Rn];
+        }
+    }
+    else
+    {
+        if (preIndex)
+        {
+            start = R[Rn] - (std::popcount(regList) * 4);
+        }
+        else
+        {
+            start = R[Rn] - (std::popcount(regList) * 4) + 4;
+        }
+    }
+
+    if (writeBack)
+    {
+        uint32_t totalBytes = std::popcount(regList) * 4;
+        if (upDown)
+        {
+            R[Rn] += totalBytes;
+        }
+        else
+        {
+            R[Rn] -= totalBytes;
+        }
+        logFile << get_indent() << "Writeback: R[" << (int)Rn << "] atualizado para 0x" << std::hex << R[Rn] << std::dec << "\n";
+    }
+
+    uint32_t addr = start;
+    for (int i = 0; i < 16; i++)
+    {
+        if ((regList >> i) & 0x1)
+        {
+            if (loadStore)
+            {
+                OpResult status = memoria->get32(addr);
+                if (status.ok)
+                {
+                    R[i] = status.result;
+                    logFile << get_indent() << "Lido da memória: 0x" << std::hex << status.result << std::dec << " -> escrito em R[" << i << "]\n";
+                }
+                else
+                {
+                    logFile << get_indent() << "Falha ao ler o endereço: 0x" << std::hex << addr << std::dec << "\n";
+                }
+            }
+            else
+            {
+                memoria->set32(addr, R[i]);
+                logFile << get_indent() << "Escrito na memória: 0x" << std::hex << R[i] << std::dec << " no endereço 0x" << std::hex << addr << std::dec << "\n";
+            }
+            addr += 4;
+        }
+    }
+
+    indent_level--;
+    logFile << get_indent() << "}\n";
+}
+void Cpu::swp(uint32_t opcode)
+{
+    logFile << get_indent() << "[SWP]{\n";
+    indent_level++;
+
+    bool wordByte = (opcode >> 22) & 0x1;
+    uint8_t Rn = (opcode >> 16) & 0xF;
+    uint8_t Rd = (opcode >> 12) & 0xF;
+    uint8_t Rm = opcode & 0xF;
+
+    logFile << get_indent() << "Tipo de Dado: " << ((wordByte) ? "Byte(8 bits)" : "Word(32 bits)") << "\n";
+    logFile << get_indent() << "Rn: " << std::hex << R[Rn] << "\n";
+    logFile << get_indent() << "Rm: " << R[Rm] << std::dec << "\n";
+
+    OpResult status;
+    if (wordByte)
+    {
+        status = memoria->get8(R[Rn]);
+        if (status.ok)
+        {
+            R[Rd] = status.result;
+            logFile << get_indent() << "Valor Guardado em Rd: " << std::hex << R[Rd] << std::dec << "\n";
+            memoria->set8(R[Rn], (R[Rm] & 0xFF));
+        }
+        else
+        {
+            logFile << get_indent() << "[ERRO] Mem::get8 Retornou {ok} false\n";
+            return;
+        }
+    }
+    else
+    {
+        status = memoria->get32(R[Rn]);
+        if (status.ok)
+        {
+            R[Rd] = status.result;
+            logFile << get_indent() << "Valor Guardado em Rd: " << std::hex << R[Rd] << std::dec << "\n";
+            memoria->set32(R[Rn], R[Rm]);
+        }
+        else
+        {
+            logFile << get_indent() << "[ERRO] Mem::get32 Retornou {ok} false\n";
+            return;
+        }
+    }
+    indent_level--;
+    logFile << get_indent() << "}";
+}
 
 void Cpu::set_r(uint8_t index, uint32_t value)
 {
@@ -1012,7 +1150,7 @@ void Cpu::step()
     OpResult getOpcode = memoria->get32(R[15]);
     uint32_t opcode = getOpcode.result;
     uint32_t pc_atual = R[15];
-    R[15] += 4; // Avança o PC em 4 bytes (modo ARM 32-bit)
+    R[15] += pc_atual + 8; // Avança o PC em 4 bytes (modo ARM 32-bit)
 
     logFile << get_indent() << "[STEP] {\n";
     indent_level++;
@@ -1051,6 +1189,10 @@ void Cpu::step()
                 if ((op_mul & 0xFC) == 0x00 || (op_mul & 0xF8) == 0x08)
                 {
                     mul(opcode);
+                }
+                else if ((op_mul & 0xFB) == 0x10 && ((opcode >> 4) & 0xFF) == 0x09)
+                {
+                    swp(opcode);
                 }
             }
         }
@@ -1121,7 +1263,7 @@ void Cpu::step()
 
     case 0b100:
     {
-        // Reservado para LDM / STM (Block Transfer)
+        bdt(opcode); // LDM / STM (Block Transfer)
         break;
     }
 
@@ -1138,6 +1280,12 @@ void Cpu::step()
         break;
     }
     }
+
+    if (R[15] == pc_atual + 8)
+    {
+        R[15] = pc_atual + 4;
+    }
+
     indent_level--;
     logFile << get_indent() << "}\n";
 }

@@ -38,6 +38,8 @@ private:
     void mrs(uint32_t opcode);
     void sdt(uint32_t opcode);
     void hw_s(uint32_t opcode);
+    void bdt(uint32_t opcode);
+    void swp(uint32_t opcode);
 
 public:
     Cpu(Mem *mem);
