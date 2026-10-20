@@ -1,4 +1,5 @@
 #include "cpu.hpp"
+#include "memoria.hpp"
 #include <bit>
 #include <cstdint>
 #include <iostream>
@@ -42,6 +43,32 @@ std::string get_indent()
 {
     return std::string(indent_level, '\t');
 }
+
+void Cpu::set_reg(uint8_t index, uint32_t valor)
+{
+    // pra tratamento com registradores de interrupções
+    if (index < 16)
+    {
+        R[index] = valor;
+    }
+    if (index == 15)
+    {
+        pc_alterado = true;
+    }
+};
+
+uint32_t Cpu::get_reg(uint8_t index)
+{
+    // pra tratamento com registradores de interrupções
+    if (index < 15)
+    {
+        return R[index];
+    }
+    if (index == 15)
+    {
+        return (get_bit(CPSR, 5)) ? R[15] + 4 : R[15] + 8;
+    }
+};
 
 OpResult Cpu::shift_barrier(uint32_t shiftType, uint32_t valor, uint8_t count, bool origemImediato, bool flagC)
 {
@@ -191,7 +218,7 @@ OpResult Cpu::shift_barrier(uint32_t shiftType, uint32_t valor, uint8_t count, b
     logFile << get_indent() << "Resultado: " << std::hex << resultado << std::dec << "\n";
     indent_level--;
     logFile << get_indent() << "}\n";
-    OpResult returning(resultado, 0, true);
+    OpResult returning(resultado, flagC, true);
     return returning;
 }
 bool Cpu::checar_condicao(uint32_t opcode)
@@ -244,20 +271,20 @@ bool Cpu::checar_condicao(uint32_t opcode)
     }
 }
 
-void Cpu::alu(uint32_t opcode)
+void Cpu::arm_alu(uint32_t opcode)
 {
-    logFile << get_indent() << "[ALU] {\n";
+    logFile << get_indent() << "[ALU] {" << std::endl;
     indent_level++;
     // Registradores
     uint8_t Rn = (opcode >> 16) & 0xF;
     uint8_t Rd = (opcode >> 12) & 0xF;
-    logFile << get_indent() << "Rn: 0x" << std::hex << R[Rn] << " Rd: 0x" << R[Rd] << std::dec << "\n";
+    logFile << get_indent() << "Rn: 0x" << std::hex << get_reg(Rn) << " Rd: 0x" << get_reg(Rd) << std::dec << std::endl;
 
     // flags da alu
     bool updateFlag = (opcode >> 20) & 0x1;
     bool imediatoFlag = (opcode >> 25) & 0x1;
-    logFile << get_indent() << "Atualizar flags: " << ((updateFlag) ? "True" : "False") << "\n";
-    logFile << get_indent() << "Operação imediata: " << ((imediatoFlag) ? "True" : "False") << "\n";
+    logFile << get_indent() << "Atualizar flags: " << ((updateFlag) ? "True" : "False") << std::endl;
+    logFile << get_indent() << "Operação imediata: " << ((imediatoFlag) ? "True" : "False") << std::endl;
 
     // flags para o CPSR
     bool flagN;
@@ -273,14 +300,15 @@ void Cpu::alu(uint32_t opcode)
     {
         uint8_t rorCount = ((opcode >> 8) & 0xF) * 2;
         uint32_t nn = opcode & 0xFF;
-        logFile << get_indent() << "Valor imediato: " << std::hex << nn << std::dec << "\n";
-        logFile << get_indent() << "Contagem de ROR: " << +rorCount << "\n";
+        logFile << get_indent() << "Valor imediato: " << std::hex << nn << std::dec << std::endl;
+        logFile << get_indent() << "Contagem de ROR: " << +rorCount << std::endl;
 
         val = std::rotr(nn, rorCount);
         if (rorCount != 0)
         {
             flagC = get_bit(val, 31);
         }
+        set_reg(Rd, get_reg(Rd) + (1));
     }
     else
     {
@@ -296,15 +324,15 @@ void Cpu::alu(uint32_t opcode)
         else
         {
             uint8_t Rs = (opcode >> 8) & 0xF;
-            count = R[Rs] & 0xFF;
+            count = get_reg(Rs) & 0xFF;
         }
 
         uint8_t shiftType = (opcode >> 5) & 0b11;
 
-        OpResult op2 = shift_barrier(shiftType, R[Rm], count, origemImediato, flagC);
+        OpResult op2 = shift_barrier(shiftType, get_reg(Rm), count, origemImediato, flagC);
 
         val = op2.result;
-        flagC = op2.ok;
+        flagC = op2.extra;
     }
 
     // resultado e se pode escrever o resultado em rd
@@ -315,108 +343,108 @@ void Cpu::alu(uint32_t opcode)
     // atualiza flags se necessario
     // pode setar a escrita de rd como falso
     // atualiza o resultado
-    logFile << get_indent() << "Segundo Operando: " << std::hex << val << std::dec << "\n";
+    logFile << get_indent() << "Segundo Operando: " << std::hex << val << std::dec << std::endl;
     logFile << get_indent() << "Tipo de operação: ";
     uint8_t alu_op = (opcode >> 21) & 0xF;
     switch (alu_op)
     {
     case 0x0:
-        logFile << "AND\n";
-        resultado = R[Rn] & val;
+        logFile << "AND" << std::endl;
+        resultado = get_reg(Rn) & val;
         break;
 
     case 0x1:
-        logFile << "EOR\n";
-        resultado = R[Rn] ^ val;
+        logFile << "EOR" << std::endl;
+        resultado = get_reg(Rn) ^ val;
         break;
 
     case 0x2:
-        logFile << "SUB\n";
-        resultado = R[Rn] - val;
-        flagC = (R[Rn] >= val);
-        flagV = ((R[Rn] ^ val) & (R[Rn] ^ resultado)) >> 31;
+        logFile << "SUB" << std::endl;
+        resultado = get_reg(Rn) - val;
+        flagC = (get_reg(Rn) >= val);
+        flagV = ((get_reg(Rn) ^ val) & (get_reg(Rn) ^ resultado)) >> 31;
         break;
 
     case 0x3:
-        logFile << "RSB\n";
-        resultado = val - R[Rn];
-        flagC = (val >= R[Rn]);
-        flagV = ((R[Rn] ^ val) & (val ^ resultado)) >> 31;
+        logFile << "RSB" << std::endl;
+        resultado = val - get_reg(Rn);
+        flagC = (val >= get_reg(Rn));
+        flagV = ((get_reg(Rn) ^ val) & (val ^ resultado)) >> 31;
         break;
 
     case 0x4:
-        logFile << "ADD\n";
-        resultado = R[Rn] + val;
-        flagC = ((uint64_t)R[Rn] + (uint64_t)val) > UINT32_MAX;
-        flagV = ((R[Rn] ^ resultado) & (val ^ resultado)) >> 31;
+        logFile << "ADD" << std::endl;
+        resultado = get_reg(Rn) + val;
+        flagC = ((uint64_t)get_reg(Rn) + (uint64_t)val) > UINT32_MAX;
+        flagV = ((get_reg(Rn) ^ resultado) & (val ^ resultado)) >> 31;
         break;
 
     case 0x5:
-        logFile << "ADC\n";
-        resultado = R[Rn] + val + Carry;
-        flagC = ((uint64_t)R[Rn] + (uint64_t)val + Carry) > UINT32_MAX;
-        flagV = ((R[Rn] ^ resultado) & (val ^ resultado)) >> 31;
+        logFile << "ADC" << std::endl;
+        resultado = get_reg(Rn) + val + Carry;
+        flagC = ((uint64_t)get_reg(Rn) + (uint64_t)val + Carry) > UINT32_MAX;
+        flagV = ((get_reg(Rn) ^ resultado) & (val ^ resultado)) >> 31;
         break;
 
     case 0x6:
-        logFile << "SBC\n";
-        resultado = R[Rn] - val - !Carry;
-        flagC = ((uint64_t)R[Rn] - (uint64_t)val - !Carry) <= UINT32_MAX;
-        flagV = ((R[Rn] ^ val) & (R[Rn] ^ resultado)) >> 31;
+        logFile << "SBC" << std::endl;
+        resultado = get_reg(Rn) - val - !Carry;
+        flagC = ((uint64_t)get_reg(Rn) - (uint64_t)val - !Carry) <= UINT32_MAX;
+        flagV = ((get_reg(Rn) ^ val) & (get_reg(Rn) ^ resultado)) >> 31;
         break;
 
     case 0x7:
-        logFile << "RSC\n";
-        resultado = val - R[Rn] - !Carry;
-        flagC = ((uint64_t)val - (uint64_t)R[Rn] - !Carry) <= UINT32_MAX;
-        flagV = ((R[Rn] ^ val) & (val ^ resultado)) >> 31;
+        logFile << "RSC" << std::endl;
+        resultado = val - get_reg(Rn) - !Carry;
+        flagC = ((uint64_t)val - (uint64_t)get_reg(Rn) - !Carry) <= UINT32_MAX;
+        flagV = ((get_reg(Rn) ^ val) & (val ^ resultado)) >> 31;
         break;
 
     case 0x8:
-        logFile << "TST\n";
-        resultado = R[Rn] & val;
+        logFile << "TST" << std::endl;
+        resultado = get_reg(Rn) & val;
         escrever_rd = false;
         break;
 
     case 0x9:
-        logFile << "TEQ\n";
-        resultado = R[Rn] ^ val;
+        logFile << "TEQ" << std::endl;
+        resultado = get_reg(Rn) ^ val;
         escrever_rd = false;
         break;
 
     case 0xA:
-        logFile << "CMP\n";
-        resultado = R[Rn] - val;
+        logFile << "CMP" << std::endl;
+        resultado = get_reg(Rn) - val;
         escrever_rd = false;
-        flagC = (R[Rn] >= val);
-        flagV = ((R[Rn] ^ val) & (R[Rn] ^ resultado)) >> 31;
+        flagC = (get_reg(Rn) >= val);
+        flagV = ((get_reg(Rn) ^ val) & (get_reg(Rn) ^ resultado)) >> 31;
         break;
 
     case 0xB:
-        logFile << "CMN\n";
-        resultado = R[Rn] + val;
-        flagC = ((uint64_t)R[Rn] + (uint64_t)val) > UINT32_MAX;
-        flagV = ((R[Rn] ^ resultado) & (val ^ resultado)) >> 31;
+        logFile << "CMN" << std::endl;
+        resultado = get_reg(Rn) + val;
+        flagC = ((uint64_t)get_reg(Rn) + (uint64_t)val) > UINT32_MAX;
+        flagV = ((get_reg(Rn) ^ resultado) & (val ^ resultado)) >> 31;
         escrever_rd = false;
         break;
 
     case 0xC:
-        logFile << "ORR\n";
-        resultado = R[Rn] | val;
+        logFile << "ORR" << std::endl;
+        resultado = get_reg(Rn) | val;
         break;
 
     case 0xD:
-        logFile << "MOV\n";
+        logFile << "MOV" << std::endl;
         resultado = val;
         break;
 
     case 0xE:
-        logFile << "BIC\n";
-        resultado = R[Rn] & (~val);
+        logFile << "BIC" << std::endl;
+        resultado = get_reg(Rn) & (~val);
         break;
 
     case 0xF:
-        logFile << "MVN\n";
+        logFile << "MVN" << std::endl;
         resultado = ~val;
         break;
 
@@ -433,26 +461,26 @@ void Cpu::alu(uint32_t opcode)
         set_bit(CPSR, 30, flagZ);
         set_bit(CPSR, 29, flagC);
         set_bit(CPSR, 28, flagV);
-        logFile << get_indent() << "Flags atualizadas: N=" << flagN << " Z=" << flagZ << " C=" << flagC << " V=" << flagV << "\n";
+        logFile << get_indent() << "Flags atualizadas: N=" << flagN << " Z=" << flagZ << " C=" << flagC << " V=" << flagV << std::endl;
     }
 
     // pode escrever o resultador em Rd ?
     if (escrever_rd)
     {
-        logFile << get_indent() << "Resultado escrito em R[" << +Rd << "]: 0x" << std::hex << resultado << std::dec << "\n";
-        R[Rd] = resultado;
+        logFile << get_indent() << "Resultado escrito em get_reg(" << +Rd << "): 0x" << std::hex << resultado << std::dec << std::endl;
+        set_reg(Rd, resultado);
     }
     indent_level--;
-    logFile << get_indent() << "}\n";
+    logFile << get_indent() << "}" << std::endl;
 }
-void Cpu::mul(uint32_t opcode)
+void Cpu::arm_mul(uint32_t opcode)
 {
-    logFile << get_indent() << "[MUL] {\n";
+    logFile << get_indent() << "[MUL] {" << std::endl;
     indent_level++;
     // é pra atualizar flags?
 
     bool updateFlag = (opcode >> 20) & 0x1;
-    logFile << get_indent() << "Atualizar flags: " << ((updateFlag) ? "True" : "False") << "\n";
+    logFile << get_indent() << "Atualizar flags: " << ((updateFlag) ? "True" : "False") << std::endl;
 
     // registradores
     uint8_t Rd = (opcode >> 16) & 0xF;
@@ -461,17 +489,17 @@ void Cpu::mul(uint32_t opcode)
     uint8_t Rm = opcode & 0xF;
     uint8_t RdHigh = Rd;
     uint8_t RdLow = Rn;
-    logFile << get_indent() << "Rd: " << std::hex << R[Rd] << " Rn: " << R[Rn] << " Rs: " << R[Rs] << " Rm: " << R[Rm] << std::dec << "\n";
+    logFile << get_indent() << "Rd: " << std::hex << get_reg(Rd) << " Rn: " << get_reg(Rn) << " Rs: " << get_reg(Rs) << " Rm: " << get_reg(Rm) << std::dec << std::endl;
 
     // identificador e modificadores da multiplicação
     uint8_t mulType = (opcode >> 4) & 0xF;
     bool longFlag = (opcode >> 23) & 0x1;
     bool signedFlag = ((opcode >> 22) & 0x1);
     bool aculmulativo = (opcode >> 21) & 0x1;
-    logFile << get_indent() << "Tipo de multiplicação: " << std::hex << (int)mulType << std::dec << "\n";
-    logFile << get_indent() << "Multiplicação longa: " << ((longFlag) ? "True" : "False") << "\n";
-    logFile << get_indent() << "Multiplicação com sinal: " << ((signedFlag) ? "True" : "False") << "\n";
-    logFile << get_indent() << "Multiplicação acumulativa: " << ((aculmulativo) ? "True" : "False") << "\n";
+    logFile << get_indent() << "Tipo de multiplicação: " << std::hex << (int)mulType << std::dec << std::endl;
+    logFile << get_indent() << "Multiplicação longa: " << ((longFlag) ? "True" : "False") << std::endl;
+    logFile << get_indent() << "Multiplicação com sinal: " << ((signedFlag) ? "True" : "False") << std::endl;
+    logFile << get_indent() << "Multiplicação acumulativa: " << ((aculmulativo) ? "True" : "False") << std::endl;
 
     uint32_t resultado = 0;
     uint32_t resultadoLow = 0;
@@ -489,7 +517,7 @@ void Cpu::mul(uint32_t opcode)
         if (aculmulativo)
         {
             // no acumulativo o resultado é somado no final por outro valor no caso aqui o proprio bit 64 do Rd baixo com Rd alto
-            uint64_t Rd_64 = ((uint64_t)R[RdHigh] << 32) | R[RdLow];
+            uint64_t Rd_64 = ((uint64_t)get_reg(RdHigh) << 32) | get_reg(RdLow);
 
             if (signedFlag)
             {
@@ -498,11 +526,11 @@ void Cpu::mul(uint32_t opcode)
                 para passar pra int32 preservando o sinal e dpeois pra int64 se eu passasse
                 direto pra int64 ele n traduziria o sinal e daria um positivo
                 */
-                buffer_result = ((int64_t)(int32_t)R[Rm] * (int64_t)(int32_t)R[Rs]) + (int64_t)Rd_64;
+                buffer_result = ((int64_t)(int32_t)get_reg(Rm) * (int64_t)(int32_t)get_reg(Rs)) + (int64_t)Rd_64;
             }
             else
             {
-                buffer_result = ((uint64_t)R[Rm] * (uint64_t)R[Rs]) + Rd_64;
+                buffer_result = ((uint64_t)get_reg(Rm) * (uint64_t)get_reg(Rs)) + Rd_64;
             }
         }
         else
@@ -510,18 +538,18 @@ void Cpu::mul(uint32_t opcode)
             // mesma logica mas sem somar com Rd_64
             if (signedFlag)
             {
-                buffer_result = (int64_t)((int32_t)R[Rm] * (int64_t)(int32_t)R[Rs]);
+                buffer_result = (int64_t)((int32_t)get_reg(Rm) * (int64_t)(int32_t)get_reg(Rs));
             }
             else
             {
-                buffer_result = ((uint64_t)R[Rm] * (uint64_t)R[Rs]);
+                buffer_result = ((uint64_t)get_reg(Rm) * (uint64_t)get_reg(Rs));
             }
         }
         // pega o resultado normal e deixa com os bits altos e já seta os Rd baixo com o resultado baixo
         resultado = (buffer_result >> 32) & UINT32_MAX;
         resultadoLow = buffer_result & UINT32_MAX;
-        R[RdLow] = resultadoLow;
-        logFile << get_indent() << "Resultado baixo escrito em R[" << +RdLow << "]: 0x" << std::hex << resultadoLow << std::dec << "\n";
+        set_reg(RdLow, resultadoLow);
+        logFile << get_indent() << "Resultado baixo escrito em get_reg(" << +RdLow << "): 0x" << std::hex << resultadoLow << std::dec << std::endl;
     }
     else
     {
@@ -533,11 +561,11 @@ void Cpu::mul(uint32_t opcode)
         if (aculmulativo)
         {
             // quando acumu8lativo vc mutiplica e soma
-            resultado = R[Rm] * R[Rs] + R[Rn];
+            resultado = get_reg(Rm) * get_reg(Rs) + get_reg(Rn);
         }
         else
         {
-            resultado = R[Rm] * R[Rs];
+            resultado = get_reg(Rm) * get_reg(Rs);
         }
     }
 
@@ -549,83 +577,83 @@ void Cpu::mul(uint32_t opcode)
     }
 
     // guarda o resultado em Rd se longFlag o resultado vai ser a parte alta e Rd tem o mesmo valor que RdHigh o RdLow já foi setado corretamente
-    R[Rd] = resultado;
-    logFile << get_indent() << "Resultado escrito em R[" << +Rd << "]: 0x" << std::hex << resultado << std::dec << "\n";
+    set_reg(Rd, resultado);
+    logFile << get_indent() << "Resultado escrito em get_reg(" << +Rd << "): 0x" << std::hex << resultado << std::dec << std::endl;
 
     indent_level--;
-    logFile << get_indent() << "}\n";
+    logFile << get_indent() << "}" << std::endl;
 }
-void Cpu::branch(uint32_t opcode)
+void Cpu::arm_branch(uint32_t opcode)
 {
-    logFile << get_indent() << "[BRANCH] {\n";
+    logFile << get_indent() << "[BRANCH] {" << std::endl;
     indent_level++;
 
     bool linkBranch = (opcode >> 24) & 0x1;
-    logFile << get_indent() << "Tipo: " << (linkBranch ? "BL (Branch with Link)" : "B (Branch)") << "\n";
+    logFile << get_indent() << "Tipo: " << (linkBranch ? "BL (Branch with Link)" : "B (Branch)") << std::endl;
 
     // Extrai 24 bits, estende o sinal para 32 bits e multiplica por 4 (Gambiarra)
     int32_t offset = (static_cast<int32_t>(opcode & 0x00FFFFFF) << 8) >> 6;
-    logFile << get_indent() << "Offset de salto: " << offset << " bytes\n";
-    logFile << get_indent() << "PC atual (R15): 0x" << std::hex << R[15] << std::dec << "\n";
+    logFile << get_indent() << "Offset de salto: " << offset << " bytes" << std::endl;
+    logFile << get_indent() << "PC atual (R15): 0x" << std::hex << get_reg(15) << std::dec << std::endl;
 
     // Se for BL (Branch with Link), salva o endereço de retorno (próxima instrução)
     if (linkBranch)
     {
-        R[14] = R[15] - 4; // R[15] já é pc_atual + 4
-        logFile << get_indent() << "LR (R14) salvo: 0x" << std::hex << R[14] << std::dec << "\n";
+        set_reg(14, get_reg(15) - 4); // get_reg(15) já é pc_atual + 4
+        logFile << get_indent() << "LR (R14) salvo: 0x" << std::hex << get_reg(14) << std::dec << std::endl;
     }
 
     // O hardware ARM calcula o salto em relação a (PC_atual + 8)
-    // Como R[15] vale (PC_atual + 4), somamos mais 4 para alinhar com o pipeline
-    R[15] += offset;
-    logFile << get_indent() << "Novo PC (R15): 0x" << std::hex << R[15] << std::dec << "\n";
+    // Como get_reg(15) vale (PC_atual + 4), somamos mais 4 para alinhar com o pipeline
+    set_reg(15, get_reg(15) + (offset));
+    logFile << get_indent() << "Novo PC (R15): 0x" << std::hex << get_reg(15) << std::dec << std::endl;
 
     indent_level--;
-    logFile << get_indent() << "}\n";
+    logFile << get_indent() << "}" << std::endl;
 }
-void Cpu::blx(uint32_t opcode)
+void Cpu::arm_bx(uint32_t opcode)
 {
-    logFile << get_indent() << "[BLX] {\n";
+    logFile << get_indent() << "[BLX] {" << std::endl;
     indent_level++;
 
     // pega o endereço do pulo em Rm
     uint8_t Rm = opcode & 0xF;
-    uint32_t address = R[Rm];
+    uint32_t address = get_reg(Rm);
 
-    logFile << get_indent() << "Registrador Rm: R" << (int)Rm << " = 0x" << std::hex << address << std::dec << "\n";
+    logFile << get_indent() << "Registrador Rm: R" << (int)Rm << " = 0x" << std::hex << address << std::dec << std::endl;
 
     // flag pra se é pra trocar pro modo Thumb
     bool modoThumb = address & 0x1;
-    logFile << get_indent() << "Trocar para modo Thumb: " << (modoThumb ? "True" : "False") << "\n";
+    logFile << get_indent() << "Trocar para modo Thumb: " << (modoThumb ? "True" : "False") << std::endl;
 
     set_bit(CPSR, 5, modoThumb);
 
     if (modoThumb)
     {
         // alinha pra só mutiplos de 2
-        R[15] = address & (~(uint32_t)1);
+        set_reg(15, address & (~(uint32_t)1));
     }
     else
     {
         // alinha pra só mutiplos de 4
-        R[15] = address & (~(uint32_t)3);
+        set_reg(15, address & (~(uint32_t)3));
     }
 
-    logFile << get_indent() << "Novo PC (R15) alinhado: 0x" << std::hex << R[15] << std::dec << "\n";
+    logFile << get_indent() << "Novo PC (R15) alinhado: 0x" << std::hex << get_reg(15) << std::dec << std::endl;
 
     indent_level--;
-    logFile << get_indent() << "}\n";
+    logFile << get_indent() << "}" << std::endl;
 }
-void Cpu::msr(uint32_t opcode)
+void Cpu::arm_msr(uint32_t opcode)
 {
-    logFile << get_indent() << "[MSR] {\n";
+    logFile << get_indent() << "[MSR] {" << std::endl;
     indent_level++;
 
     bool imediato = (opcode >> 25) & 0x1; // imediato
     bool spsrFlag = (opcode >> 22) & 0x1; // olha se é pra pegar o spsr e colocar no cpsr ou o contrario
 
-    logFile << get_indent() << "Destino: " << (spsrFlag ? "SPSR" : "CPSR") << "\n";
-    logFile << get_indent() << "Tipo de valor: " << (imediato ? "Imediato" : "Registrador") << "\n";
+    logFile << get_indent() << "Destino: " << (spsrFlag ? "SPSR" : "CPSR") << std::endl;
+    logFile << get_indent() << "Tipo de valor: " << (imediato ? "Imediato" : "Registrador") << std::endl;
 
     uint32_t *endereçoPSR = &CPSR; // o destino do valor
     uint32_t programState = 0;     // o valor a ser salvo
@@ -659,7 +687,7 @@ void Cpu::msr(uint32_t opcode)
         mask &= 0xFF000000;
     }
 
-    logFile << get_indent() << "Máscara de escrita: 0x" << std::hex << mask << std::dec << "\n";
+    logFile << get_indent() << "Máscara de escrita: 0x" << std::hex << mask << std::dec << std::endl;
 
     // se for pra colocar em sprs ele ajusta qual spsr dependendo do modo atual
     if (spsrFlag)
@@ -670,9 +698,9 @@ void Cpu::msr(uint32_t opcode)
         case 0b11111:
         case 0b10001:
         default:
-            logFile << get_indent() << "Erro: Acesso inválido ao SPSR no modo 0x" << std::hex << (int)modeBits << std::dec << "\n";
+            logFile << get_indent() << "Erro: Acesso inválido ao SPSR no modo 0x" << std::hex << (int)modeBits << std::dec << std::endl;
             indent_level--;
-            logFile << get_indent() << "}\n";
+            logFile << get_indent() << "}" << std::endl;
             return;
 
         case 0b10010:
@@ -701,32 +729,32 @@ void Cpu::msr(uint32_t opcode)
         uint8_t rorCount = ((opcode >> 8) & 0xF) * 2;
 
         programState = std::rotr(nn, rorCount);
-        logFile << get_indent() << "Valor imediato obtido: 0x" << std::hex << programState << std::dec << "\n";
+        logFile << get_indent() << "Valor imediato obtido: 0x" << std::hex << programState << std::dec << std::endl;
     }
     else
     {
         uint8_t Rm = opcode & 0xF;
-        programState = R[Rm];
-        logFile << get_indent() << "Valor lido de R[" << (int)Rm << "]: 0x" << std::hex << programState << std::dec << "\n";
+        programState = get_reg(Rm);
+        logFile << get_indent() << "Valor lido de get_reg(" << (int)Rm << "): 0x" << std::hex << programState << std::dec << std::endl;
     }
 
     // aplica a mascara
     *endereçoPSR = (*endereçoPSR & ~mask) | (programState & mask);
-    logFile << get_indent() << "Novo valor do registrador de status: 0x" << std::hex << *endereçoPSR << std::dec << "\n";
+    logFile << get_indent() << "Novo valor do registrador de status: 0x" << std::hex << *endereçoPSR << std::dec << std::endl;
 
     indent_level--;
-    logFile << get_indent() << "}\n";
+    logFile << get_indent() << "}" << std::endl;
 }
-void Cpu::mrs(uint32_t opcode)
+void Cpu::arm_mrs(uint32_t opcode)
 {
-    logFile << get_indent() << "[MRS] {\n";
+    logFile << get_indent() << "[MRS] {" << std::endl;
     indent_level++;
 
     uint8_t Rd = (opcode >> 12) & 0xF;
     bool spsrFlag = (opcode >> 22) & 0x1;
 
-    logFile << get_indent() << "Registrador destino: R" << (int)Rd << "\n";
-    logFile << get_indent() << "Origem: " << (spsrFlag ? "SPSR" : "CPSR") << "\n";
+    logFile << get_indent() << "Registrador destino: R" << (int)Rd << std::endl;
+    logFile << get_indent() << "Origem: " << (spsrFlag ? "SPSR" : "CPSR") << std::endl;
 
     uint32_t *endereçoPSR = &CPSR;
 
@@ -739,9 +767,9 @@ void Cpu::mrs(uint32_t opcode)
         case 0b11111:
         case 0b10001:
         default:
-            logFile << get_indent() << "Erro: Acesso inválido ao SPSR no modo 0x" << std::hex << (int)modeBits << std::dec << "\n";
+            logFile << get_indent() << "Erro: Acesso inválido ao SPSR no modo 0x" << std::hex << (int)modeBits << std::dec << std::endl;
             indent_level--;
-            logFile << get_indent() << "}\n";
+            logFile << get_indent() << "}" << std::endl;
             return;
 
         case 0b10010:
@@ -762,15 +790,15 @@ void Cpu::mrs(uint32_t opcode)
         }
     }
 
-    R[Rd] = *endereçoPSR;
-    logFile << get_indent() << "Valor lido (0x" << std::hex << *endereçoPSR << std::dec << ") escrito em R[" << (int)Rd << "]\n";
+    set_reg(Rd, *endereçoPSR);
+    logFile << get_indent() << "Valor lido (0x" << std::hex << *endereçoPSR << std::dec << ") escrito em get_reg(" << (int)Rd << ")" << std::endl;
 
     indent_level--;
-    logFile << get_indent() << "}\n";
+    logFile << get_indent() << "}" << std::endl;
 }
-void Cpu::sdt(uint32_t opcode)
+void Cpu::arm_sdt(uint32_t opcode)
 {
-    logFile << get_indent() << "[SDT] {\n";
+    logFile << get_indent() << "[SDT] {" << std::endl;
     indent_level++;
 
     bool imediato = (opcode >> 25) & 0x1;
@@ -783,12 +811,12 @@ void Cpu::sdt(uint32_t opcode)
     uint8_t Rd = (opcode >> 12) & 0xF;
     uint8_t Rn = (opcode >> 16) & 0xF;
 
-    logFile << get_indent() << "Operação: " << (loadStore ? "LDR" : "STR") << (wordByte ? "B" : "") << "\n";
-    logFile << get_indent() << "Indexação: " << (preIndex ? "Pré-indexado" : "Pós-indexado") << "\n";
-    logFile << get_indent() << "Direção offset: " << (upDown ? "+" : "-") << "\n";
-    logFile << get_indent() << "Writeback: " << (writeBack ? "True" : "False") << "\n";
-    logFile << get_indent() << "R[" << (int)Rn << "] base: 0x" << std::hex << R[Rn]
-            << " R[" << (int)Rd << "] valor: 0x" << R[Rd] << std::dec << "\n";
+    logFile << get_indent() << "Operação: " << (loadStore ? "LDR" : "STR") << (wordByte ? "B" : "") << std::endl;
+    logFile << get_indent() << "Indexação: " << (preIndex ? "Pré-indexado" : "Pós-indexado") << std::endl;
+    logFile << get_indent() << "Direção offset: " << (upDown ? "+" : "-") << std::endl;
+    logFile << get_indent() << "Writeback: " << (writeBack ? "True" : "False") << std::endl;
+    logFile << get_indent() << "get_reg(" << (int)Rn << ") base: 0x" << std::hex << get_reg(Rn)
+            << " get_reg(" << (int)Rd << ") valor: 0x" << get_reg(Rd) << std::dec << std::endl;
 
     uint32_t offset = 0;
     if (imediato)
@@ -797,24 +825,24 @@ void Cpu::sdt(uint32_t opcode)
         uint8_t shiftType = (opcode >> 5) & 0b11;
         uint8_t shiftCount = (opcode >> 7) & 0x1F;
 
-        OpResult op2 = shift_barrier(shiftType, R[Rm], shiftCount, true, get_bit(CPSR, 29));
+        OpResult op2 = shift_barrier(shiftType, get_reg(Rm), shiftCount, true, get_bit(CPSR, 29));
 
         offset = op2.result;
-        logFile << get_indent() << "Offset (R" << (int)Rm << " deslocado): 0x" << std::hex << offset << std::dec << "\n";
+        logFile << get_indent() << "Offset (R" << (int)Rm << " deslocado): 0x" << std::hex << offset << std::dec << std::endl;
     }
     else
     {
         offset = opcode & 0xFFF;
-        logFile << get_indent() << "Offset (Imediato): 0x" << std::hex << offset << std::dec << "\n";
+        logFile << get_indent() << "Offset (Imediato): 0x" << std::hex << offset << std::dec << std::endl;
     }
 
-    uint32_t endereço = R[Rn];
+    uint32_t endereço = get_reg(Rn);
     if (preIndex)
     {
-        endereço = (upDown) ? R[Rn] + offset : R[Rn] - offset;
+        endereço = (upDown) ? get_reg(Rn) + offset : get_reg(Rn) - offset;
     }
 
-    logFile << get_indent() << "Endereço final: 0x" << std::hex << endereço << std::dec << "\n";
+    logFile << get_indent() << "Endereço final: 0x" << std::hex << endereço << std::dec << std::endl;
 
     if (loadStore)
     {
@@ -831,25 +859,25 @@ void Cpu::sdt(uint32_t opcode)
         }
         if (status.ok)
         {
-            R[Rd] = status.result;
-            logFile << get_indent() << "Lido da memória: 0x" << std::hex << status.result << std::dec << " -> escrito em R[" << (int)Rd << "]\n";
+            set_reg(Rd, status.result);
+            logFile << get_indent() << "Lido da memória: 0x" << std::hex << status.result << std::dec << " -> escrito em get_reg(" << (int)Rd << ")" << std::endl;
         }
         else
         {
-            logFile << get_indent() << "Falha ao ler o endereço: 0x" << std::hex << endereço << std::dec << "\n";
+            logFile << get_indent() << "Falha ao ler o endereço: 0x" << std::hex << endereço << std::dec << std::endl;
         }
     }
     else
     {
         if (wordByte)
         {
-            memoria->set8(endereço, R[Rd] & 0xFF);
-            logFile << get_indent() << "Escrito na memória (Byte): 0x" << std::hex << (R[Rd] & 0xFF) << std::dec << " no endereço 0x" << std::hex << endereço << std::dec << "\n";
+            memoria->set8(endereço, get_reg(Rd) & 0xFF);
+            logFile << get_indent() << "Escrito na memória (Byte): 0x" << std::hex << (get_reg(Rd) & 0xFF) << std::dec << " no endereço 0x" << std::hex << endereço << std::dec << std::endl;
         }
         else
         {
-            memoria->set32(endereço, R[Rd]);
-            logFile << get_indent() << "Escrito na memória (Word): 0x" << std::hex << R[Rd] << std::dec << " no endereço 0x" << std::hex << endereço << std::dec << "\n";
+            memoria->set32(endereço, get_reg(Rd));
+            logFile << get_indent() << "Escrito na memória (Word): 0x" << std::hex << get_reg(Rd) << std::dec << " no endereço 0x" << std::hex << endereço << std::dec << std::endl;
         }
     }
 
@@ -857,17 +885,17 @@ void Cpu::sdt(uint32_t opcode)
     {
         if (!loadStore || (Rd != Rn))
         {
-            R[Rn] = (upDown) ? R[Rn] + offset : R[Rn] - offset;
-            logFile << get_indent() << "Writeback atualizou R[" << (int)Rn << "] para 0x" << std::hex << R[Rn] << std::dec << "\n";
+            set_reg(Rn, (upDown) ? get_reg(Rn) + offset : get_reg(Rn) - offset);
+            logFile << get_indent() << "Writeback atualizou get_reg(" << (int)Rn << ") para 0x" << std::hex << get_reg(Rn) << std::dec << std::endl;
         }
     }
 
     indent_level--;
-    logFile << get_indent() << "}\n";
+    logFile << get_indent() << "}" << std::endl;
 }
-void Cpu::hw_s(uint32_t opcode)
+void Cpu::arm_hw_s(uint32_t opcode)
 {
-    logFile << get_indent() << "[HW_S] {\n";
+    logFile << get_indent() << "[HW_S] {" << std::endl;
     indent_level++;
 
     bool preIndex = (opcode >> 24) & 0x1;
@@ -886,32 +914,32 @@ void Cpu::hw_s(uint32_t opcode)
     uint8_t Rd = (opcode >> 12) & 0xF;
 
     logFile << get_indent() << "Operação: " << (loadStore ? "LDR" : "STR")
-            << (signed_ ? "S" : "") << (halfword ? "H" : "B") << "\n";
-    logFile << get_indent() << "Indexação: " << (preIndex ? "Pré-indexado" : "Pós-indexado") << "\n";
-    logFile << get_indent() << "Direção offset: " << (upDown ? "+" : "-") << "\n";
-    logFile << get_indent() << "Writeback: " << (writeBack ? "True" : "False") << "\n";
-    logFile << get_indent() << "R[" << (int)Rn << "] base: 0x" << std::hex << R[Rn]
-            << " R[" << (int)Rd << "] valor: 0x" << R[Rd] << std::dec << "\n";
+            << (signed_ ? "S" : "") << (halfword ? "H" : "B") << std::endl;
+    logFile << get_indent() << "Indexação: " << (preIndex ? "Pré-indexado" : "Pós-indexado") << std::endl;
+    logFile << get_indent() << "Direção offset: " << (upDown ? "+" : "-") << std::endl;
+    logFile << get_indent() << "Writeback: " << (writeBack ? "True" : "False") << std::endl;
+    logFile << get_indent() << "get_reg(" << (int)Rn << ") base: 0x" << std::hex << get_reg(Rn)
+            << " get_reg(" << (int)Rd << ") valor: 0x" << get_reg(Rd) << std::dec << std::endl;
 
     uint32_t offset = (offsetHigh << 4) | offsetLow;
 
     if (imediato)
     {
-        offset = R[Rm];
-        logFile << get_indent() << "Offset (R[" << (int)Rm << "]): 0x" << std::hex << offset << std::dec << "\n";
+        offset = get_reg(Rm);
+        logFile << get_indent() << "Offset (get_reg(" << (int)Rm << ")): 0x" << std::hex << offset << std::dec << std::endl;
     }
     else
     {
-        logFile << get_indent() << "Offset (Imediato): 0x" << std::hex << offset << std::dec << "\n";
+        logFile << get_indent() << "Offset (Imediato): 0x" << std::hex << offset << std::dec << std::endl;
     }
 
-    uint32_t endereço = R[Rn];
+    uint32_t endereço = get_reg(Rn);
     if (preIndex)
     {
-        endereço = (upDown) ? R[Rn] + offset : R[Rn] - offset;
+        endereço = (upDown) ? get_reg(Rn) + offset : get_reg(Rn) - offset;
     }
 
-    logFile << get_indent() << "Endereço final: 0x" << std::hex << endereço << std::dec << "\n";
+    logFile << get_indent() << "Endereço final: 0x" << std::hex << endereço << std::dec << std::endl;
 
     if (loadStore)
     {
@@ -925,13 +953,13 @@ void Cpu::hw_s(uint32_t opcode)
                 {
                     resultado |= (((get_bit(status.result, 15)) ? 0xFFFF : 0x00) << 16);
                 }
-                R[Rd] = resultado;
+                set_reg(Rd, resultado);
                 logFile << get_indent() << "Lido da memória (Halfword" << (signed_ ? " Signed" : "") << "): 0x"
-                        << std::hex << resultado << std::dec << " -> escrito em R[" << (int)Rd << "]\n";
+                        << std::hex << resultado << std::dec << " -> escrito em get_reg(" << (int)Rd << ")" << std::endl;
             }
             else
             {
-                logFile << get_indent() << "Falha ao ler o endereço: 0x" << std::hex << endereço << std::dec << "\n";
+                logFile << get_indent() << "Falha ao ler o endereço: 0x" << std::hex << endereço << std::dec << std::endl;
             }
         }
         else
@@ -944,13 +972,13 @@ void Cpu::hw_s(uint32_t opcode)
                 {
                     resultado |= (((get_bit(status.result, 7)) ? 0xFFFFFF : 0x00) << 8);
                 }
-                R[Rd] = resultado;
+                set_reg(Rd, resultado);
                 logFile << get_indent() << "Lido da memória (Byte Signed): 0x"
-                        << std::hex << resultado << std::dec << " -> escrito em R[" << (int)Rd << "]\n";
+                        << std::hex << resultado << std::dec << " -> escrito em get_reg(" << (int)Rd << ")" << std::endl;
             }
             else
             {
-                logFile << get_indent() << "Falha ao ler o endereço: 0x" << std::hex << endereço << std::dec << "\n";
+                logFile << get_indent() << "Falha ao ler o endereço: 0x" << std::hex << endereço << std::dec << std::endl;
             }
         }
     }
@@ -958,15 +986,15 @@ void Cpu::hw_s(uint32_t opcode)
     {
         if (halfword)
         {
-            memoria->set16(endereço, R[Rd] & 0xFFFF);
-            logFile << get_indent() << "Escrito na memória (Halfword): 0x" << std::hex << (R[Rd] & 0xFFFF)
-                    << std::dec << " no endereço 0x" << std::hex << endereço << std::dec << "\n";
+            memoria->set16(endereço, get_reg(Rd) & 0xFFFF);
+            logFile << get_indent() << "Escrito na memória (Halfword): 0x" << std::hex << (get_reg(Rd) & 0xFFFF)
+                    << std::dec << " no endereço 0x" << std::hex << endereço << std::dec << std::endl;
         }
         else
         {
-            memoria->set8(endereço, R[Rd] & 0xFF);
-            logFile << get_indent() << "Escrito na memória (Byte): 0x" << std::hex << (R[Rd] & 0xFF)
-                    << std::dec << " no endereço 0x" << std::hex << endereço << std::dec << "\n";
+            memoria->set8(endereço, get_reg(Rd) & 0xFF);
+            logFile << get_indent() << "Escrito na memória (Byte): 0x" << std::hex << (get_reg(Rd) & 0xFF)
+                    << std::dec << " no endereço 0x" << std::hex << endereço << std::dec << std::endl;
         }
     }
 
@@ -974,17 +1002,17 @@ void Cpu::hw_s(uint32_t opcode)
     {
         if (!loadStore || (Rd != Rn))
         {
-            R[Rn] = (upDown) ? R[Rn] + offset : R[Rn] - offset;
-            logFile << get_indent() << "Writeback atualizou R[" << (int)Rn << "] para 0x" << std::hex << R[Rn] << std::dec << "\n";
+            set_reg(Rn, (upDown) ? get_reg(Rn) + offset : get_reg(Rn) - offset);
+            logFile << get_indent() << "Writeback atualizou get_reg(" << (int)Rn << ") para 0x" << std::hex << get_reg(Rn) << std::dec << std::endl;
         }
     }
 
     indent_level--;
-    logFile << get_indent() << "}\n";
+    logFile << get_indent() << "}" << std::endl;
 }
-void Cpu::bdt(uint32_t opcode)
+void Cpu::arm_bdt(uint32_t opcode)
 {
-    logFile << get_indent() << "[BDT] {\n";
+    logFile << get_indent() << "[BDT] {" << std::endl;
     indent_level++;
 
     bool preIndex = (opcode >> 24) & 0x1;
@@ -995,12 +1023,12 @@ void Cpu::bdt(uint32_t opcode)
     uint8_t Rn = (opcode >> 16) & 0xF;
     uint16_t regList = opcode & 0xFFFF;
 
-    logFile << get_indent() << "Operação: " << (loadStore ? "LDM" : "STM") << "\n";
-    logFile << get_indent() << "Indexação: " << (preIndex ? "Pré-indexado" : "Pós-indexado") << "\n";
-    logFile << get_indent() << "Direção offset: " << (upDown ? "+" : "-") << "\n";
-    logFile << get_indent() << "Writeback: " << (writeBack ? "True" : "False") << "\n";
-    logFile << get_indent() << "R[" << (int)Rn << "] base: 0x" << std::hex << R[Rn] << std::dec << "\n";
-    logFile << get_indent() << "Lista de registradores: 0x" << std::hex << regList << std::dec << "\n";
+    logFile << get_indent() << "Operação: " << (loadStore ? "LDM" : "STM") << std::endl;
+    logFile << get_indent() << "Indexação: " << (preIndex ? "Pré-indexado" : "Pós-indexado") << std::endl;
+    logFile << get_indent() << "Direção offset: " << (upDown ? "+" : "-") << std::endl;
+    logFile << get_indent() << "Writeback: " << (writeBack ? "True" : "False") << std::endl;
+    logFile << get_indent() << "get_reg(" << (int)Rn << ") base: 0x" << std::hex << get_reg(Rn) << std::dec << std::endl;
+    logFile << get_indent() << "Lista de registradores: 0x" << std::hex << regList << std::dec << std::endl;
 
     // Aqui você pode implementar a lógica para LDM/STM conforme necessário
 
@@ -1009,22 +1037,22 @@ void Cpu::bdt(uint32_t opcode)
     {
         if (preIndex)
         {
-            start = R[Rn] + 4;
+            start = get_reg(Rn) + 4;
         }
         else
         {
-            start = R[Rn];
+            start = get_reg(Rn);
         }
     }
     else
     {
         if (preIndex)
         {
-            start = R[Rn] - (std::popcount(regList) * 4);
+            start = get_reg(Rn) - (std::popcount(regList) * 4);
         }
         else
         {
-            start = R[Rn] - (std::popcount(regList) * 4) + 4;
+            start = get_reg(Rn) - (std::popcount(regList) * 4) + 4;
         }
     }
 
@@ -1033,13 +1061,13 @@ void Cpu::bdt(uint32_t opcode)
         uint32_t totalBytes = std::popcount(regList) * 4;
         if (upDown)
         {
-            R[Rn] += totalBytes;
+            set_reg(Rn, get_reg(Rn) + (totalBytes));
         }
         else
         {
-            R[Rn] -= totalBytes;
+            set_reg(Rn, get_reg(Rn) - (totalBytes));
         }
-        logFile << get_indent() << "Writeback: R[" << (int)Rn << "] atualizado para 0x" << std::hex << R[Rn] << std::dec << "\n";
+        logFile << get_indent() << "Writeback: get_reg(" << (int)Rn << ") atualizado para 0x" << std::hex << get_reg(Rn) << std::dec << std::endl;
     }
 
     uint32_t addr = start;
@@ -1052,29 +1080,29 @@ void Cpu::bdt(uint32_t opcode)
                 OpResult status = memoria->get32(addr);
                 if (status.ok)
                 {
-                    R[i] = status.result;
-                    logFile << get_indent() << "Lido da memória: 0x" << std::hex << status.result << std::dec << " -> escrito em R[" << i << "]\n";
+                    set_reg(i, status.result);
+                    logFile << get_indent() << "Lido da memória: 0x" << std::hex << status.result << std::dec << " -> escrito em get_reg(" << i << ")" << std::endl;
                 }
                 else
                 {
-                    logFile << get_indent() << "Falha ao ler o endereço: 0x" << std::hex << addr << std::dec << "\n";
+                    logFile << get_indent() << "Falha ao ler o endereço: 0x" << std::hex << addr << std::dec << std::endl;
                 }
             }
             else
             {
-                memoria->set32(addr, R[i]);
-                logFile << get_indent() << "Escrito na memória: 0x" << std::hex << R[i] << std::dec << " no endereço 0x" << std::hex << addr << std::dec << "\n";
+                memoria->set32(addr, get_reg(i));
+                logFile << get_indent() << "Escrito na memória: 0x" << std::hex << get_reg(i) << std::dec << " no endereço 0x" << std::hex << addr << std::dec << std::endl;
             }
             addr += 4;
         }
     }
 
     indent_level--;
-    logFile << get_indent() << "}\n";
+    logFile << get_indent() << "}" << std::endl;
 }
-void Cpu::swp(uint32_t opcode)
+void Cpu::arm_swp(uint32_t opcode)
 {
-    logFile << get_indent() << "[SWP]{\n";
+    logFile << get_indent() << "[SWP]{" << std::endl;
     indent_level++;
 
     bool wordByte = (opcode >> 22) & 0x1;
@@ -1082,85 +1110,59 @@ void Cpu::swp(uint32_t opcode)
     uint8_t Rd = (opcode >> 12) & 0xF;
     uint8_t Rm = opcode & 0xF;
 
-    logFile << get_indent() << "Tipo de Dado: " << ((wordByte) ? "Byte(8 bits)" : "Word(32 bits)") << "\n";
-    logFile << get_indent() << "Rn: " << std::hex << R[Rn] << "\n";
-    logFile << get_indent() << "Rm: " << R[Rm] << std::dec << "\n";
+    logFile << get_indent() << "Tipo de Dado: " << ((wordByte) ? "Byte(8 bits)" : "Word(32 bits)") << std::endl;
+    logFile << get_indent() << "Rn: " << std::hex << get_reg(Rn) << std::endl;
+    logFile << get_indent() << "Rm: " << get_reg(Rm) << std::dec << std::endl;
 
     OpResult status;
     if (wordByte)
     {
-        status = memoria->get8(R[Rn]);
+        status = memoria->get8(get_reg(Rn));
         if (status.ok)
         {
-            R[Rd] = status.result;
-            logFile << get_indent() << "Valor Guardado em Rd: " << std::hex << R[Rd] << std::dec << "\n";
-            memoria->set8(R[Rn], (R[Rm] & 0xFF));
+            set_reg(Rd, status.result);
+            logFile << get_indent() << "Valor Guardado em Rd: " << std::hex << get_reg(Rd) << std::dec << std::endl;
+            memoria->set8(get_reg(Rn), (get_reg(Rm) & 0xFF));
         }
         else
         {
-            logFile << get_indent() << "[ERRO] Mem::get8 Retornou {ok} false\n";
+            logFile << get_indent() << "[ERRO] Mem::get8 Retornou {ok} false" << std::endl;
             return;
         }
     }
     else
     {
-        status = memoria->get32(R[Rn]);
+        status = memoria->get32(get_reg(Rn));
         if (status.ok)
         {
-            R[Rd] = status.result;
-            logFile << get_indent() << "Valor Guardado em Rd: " << std::hex << R[Rd] << std::dec << "\n";
-            memoria->set32(R[Rn], R[Rm]);
+            set_reg(Rd, status.result);
+            logFile << get_indent() << "Valor Guardado em Rd: " << std::hex << get_reg(Rd) << std::dec << std::endl;
+            memoria->set32(get_reg(Rn), get_reg(Rm));
         }
         else
         {
-            logFile << get_indent() << "[ERRO] Mem::get32 Retornou {ok} false\n";
+            logFile << get_indent() << "[ERRO] Mem::get32 Retornou {ok} false" << std::endl;
             return;
         }
     }
     indent_level--;
     logFile << get_indent() << "}";
 }
-
-void Cpu::set_r(uint8_t index, uint32_t value)
-{
-    if (index < 16)
-    {
-        R[index] = value;
-    }
-    else if (index == 16)
-    {
-        CPSR = value;
-    }
-}
-uint32_t Cpu::get_r(uint8_t index)
-{
-    if (index < 16)
-    {
-        return R[index];
-    }
-    else if (index == 16)
-    {
-        return CPSR;
-    }
-    return 0;
-}
-void Cpu::step()
+void Cpu::step_arm()
 {
     // 1. FETCH
     OpResult getOpcode = memoria->get32(R[15]);
     uint32_t opcode = getOpcode.result;
-    uint32_t pc_atual = R[15];
-    R[15] += pc_atual + 8; // Avança o PC em 4 bytes (modo ARM 32-bit)
 
-    logFile << get_indent() << "[STEP] {\n";
+    logFile << get_indent() << "[STEP] {" << std::endl;
     indent_level++;
-    logFile << get_indent() << "PC atual: 0x" << std::hex << pc_atual << std::dec << "\n";
-    logFile << get_indent() << "Opcode lido: 0x" << std::hex << opcode << std::dec << "\n";
+    logFile << get_indent() << "PC atual: 0x" << std::hex << R[15] << std::dec << std::endl;
+    logFile << get_indent() << "Opcode lido: 0x" << std::hex << opcode << std::dec << std::endl;
 
     // 2. CHECK CONDITION (Bits 31..28)
     if (!checar_condicao(opcode))
     {
-        logFile << get_indent() << "Condição não satisfeita, instrução ignorada.\n";
+        logFile << get_indent() << "Condição não satisfeita, instrução ignorada." << std::endl;
         indent_level--;
         return; // Instrução ignorada se a condição der falsa
     }
@@ -1179,7 +1181,7 @@ void Cpu::step()
 
             if (sh != 0)
             {
-                hw_s(opcode); // LDRH, STRH, LDRSB, LDRSH
+                arm_hw_s(opcode); // LDRH, STRH, LDRSB, LDRSH
             }
             else
             {
@@ -1188,11 +1190,11 @@ void Cpu::step()
                 // Multiplicações de 32 bits (MUL, MLA) e 64 bits (UMULL, SMULL, etc.)
                 if ((op_mul & 0xFC) == 0x00 || (op_mul & 0xF8) == 0x08)
                 {
-                    mul(opcode);
+                    arm_mul(opcode);
                 }
                 else if ((op_mul & 0xFB) == 0x10 && ((opcode >> 4) & 0xFF) == 0x09)
                 {
-                    swp(opcode);
+                    arm_swp(opcode);
                 }
             }
         }
@@ -1209,22 +1211,22 @@ void Cpu::step()
                 {
                     // Bit 21 = 0 é MRS (ler status), Bit 21 = 1 é MSR (escrever status)
                     if ((opcode >> 21) & 1)
-                        msr(opcode);
+                        arm_msr(opcode);
                     else
-                        mrs(opcode);
+                        arm_mrs(opcode);
                 }
                 else if ((opcode & 0x0FFFFFF0) == 0x012FFF30)
                 {
-                    blx(opcode); // BX, BLX por registrador
+                    arm_bx(opcode); // BX, BLX por registrador
                 }
                 else
                 {
-                    alu(opcode); // Operação de ALU via registrador com Shift
+                    arm_alu(opcode); // Operação de ALU via registrador com Shift
                 }
             }
             else
             {
-                alu(opcode); // Operação de ALU padrão
+                arm_alu(opcode); // Operação de ALU padrão
             }
         }
         break;
@@ -1236,18 +1238,18 @@ void Cpu::step()
 
         if (op_misc == 0x12 || op_misc == 0x16)
         {
-            msr(opcode); // MSR com imediato
+            arm_msr(opcode); // MSR com imediato
         }
         else
         {
-            alu(opcode); // ALU com Imediato rotacionado
+            arm_alu(opcode); // ALU com Imediato rotacionado
         }
         break;
     }
 
     case 0b010:
     {
-        sdt(opcode); // LDR, STR, LDRB, STRB (Offset Imediato)
+        arm_sdt(opcode); // LDR, STR, LDRB, STRB (Offset Imediato)
         break;
     }
 
@@ -1256,36 +1258,1189 @@ void Cpu::step()
         bool bit4 = (opcode >> 4) & 1;
         if (!bit4)
         {
-            sdt(opcode); // LDR, STR, LDRB, STRB (Offset de Registrador)
+            arm_sdt(opcode); // LDR, STR, LDRB, STRB (Offset de Registrador)
         }
         break;
     }
 
     case 0b100:
     {
-        bdt(opcode); // LDM / STM (Block Transfer)
+        arm_bdt(opcode); // LDM / STM (Block Transfer)
         break;
     }
 
     case 0b101:
     {
-        branch(opcode); // B e BL (Desvios com offset de 24 bits)
+        arm_branch(opcode); // B e BL (Desvios com offset de 24 bits)
         break;
     }
 
     default:
     {
         std::cout << "[ERRO CPU] Opcode nao mapeado: 0x" << std::hex << opcode
-                  << " no PC: 0x" << pc_atual << std::dec << "\n";
+                  << " no PC: 0x" << R[15] << std::dec << std::endl;
         break;
     }
     }
 
-    if (R[15] == pc_atual + 8)
+    if (pc_alterado)
     {
-        R[15] = pc_atual + 4;
+        R[15] = R[15] + 4;
     }
 
     indent_level--;
-    logFile << get_indent() << "}\n";
+    logFile << get_indent() << "}" << std::endl;
+}
+
+void Cpu::thumb_format_1(uint16_t opcode)
+{
+    logFile << get_indent() << "[THUMB Format 1 - Move Shifted Register] {" << std::endl;
+    indent_level++;
+
+    uint8_t operation = (opcode >> 11) & 0b11;
+    uint8_t shiftCount = (opcode >> 6) & 0x1F;
+    uint8_t Rs = (opcode >> 3) & 0b111;
+    uint8_t Rd = opcode & 0b111;
+
+    const char *opNames[] = {"LSL", "LSR", "ASR", "RESERVED"};
+    logFile << get_indent() << "Operação: " << opNames[operation] << std::endl;
+    logFile << get_indent() << "get_reg(" << (int)Rs << ") valor: 0x" << std::hex << get_reg(Rs)
+            << " | Deslocamento: " << std::dec << (int)shiftCount << std::endl;
+
+    OpResult shiftStatus = shift_barrier(operation, get_reg(Rs), shiftCount, false, get_bit(CPSR, 29));
+
+    uint32_t resultado = shiftStatus.result;
+
+    set_reg(Rd, resultado);
+    set_bit(CPSR, 31, get_bit(resultado, 31));
+    set_bit(CPSR, 30, resultado == 0);
+    set_bit(CPSR, 29, shiftStatus.extra & 0x1);
+
+    logFile << get_indent() << "Resultado: 0x" << std::hex << resultado
+            << " -> escrito em get_reg(" << std::dec << (int)Rd << ")" << std::endl;
+    logFile << get_indent() << "Flags (NZC): N=" << get_bit(CPSR, 31)
+            << " Z=" << get_bit(CPSR, 30)
+            << " C=" << get_bit(CPSR, 29) << std::endl;
+
+    indent_level--;
+    logFile << get_indent() << "}" << std::endl;
+}
+void Cpu::thumb_format_2(uint16_t opcode)
+{
+    logFile << get_indent() << "[THUMB Format 2 - Add/Subtract] {" << std::endl;
+    indent_level++;
+
+    bool imediato = (opcode >> 10) & 0x1;
+    bool sub = (opcode >> 9) & 0x1;
+
+    uint8_t Rs = (opcode >> 3) & 0b111;
+    uint8_t Rd = opcode & 0b111;
+    uint8_t Rn = (opcode >> 6) & 0b111;
+
+    uint32_t op2 = (imediato) ? Rn : get_reg(Rn);
+
+    logFile << get_indent() << "Operação: " << (sub ? "SUB" : "ADD") << std::endl;
+    logFile << get_indent() << "get_reg(" << (int)Rs << ") valor: 0x" << std::hex << get_reg(Rs) << std::dec << std::endl;
+    if (imediato)
+    {
+        logFile << get_indent() << "Op2 (Imediato 3-bit): 0x" << std::hex << (int)Rn << std::dec << std::endl;
+    }
+    else
+    {
+        logFile << get_indent() << "Op2 (get_reg(" << (int)Rn << ")): 0x" << std::hex << op2 << std::dec << std::endl;
+    }
+
+    bool flagC = false;
+    bool overflow = false;
+
+    uint32_t resultado;
+    if (sub)
+    {
+        resultado = get_reg(Rs) - op2;
+        flagC = get_reg(Rs) >= op2;
+        overflow = ((get_reg(Rs) ^ op2) & (get_reg(Rs) ^ resultado)) & 0x80000000;
+    }
+    else
+    {
+        resultado = get_reg(Rs) + op2;
+        flagC = resultado < get_reg(Rs);
+        overflow = (~(get_reg(Rs) ^ op2) & (get_reg(Rs) ^ resultado)) & 0x80000000;
+    }
+
+    set_reg(Rd, resultado);
+
+    set_bit(CPSR, 31, get_bit(resultado, 31));
+    set_bit(CPSR, 30, resultado == 0);
+    set_bit(CPSR, 29, flagC);
+    set_bit(CPSR, 28, overflow);
+
+    logFile << get_indent() << "Resultado: 0x" << std::hex << resultado
+            << " -> escrito em get_reg(" << std::dec << (int)Rd << ")" << std::endl;
+    logFile << get_indent() << "Flags (NZCV): N=" << get_bit(CPSR, 31)
+            << " Z=" << get_bit(CPSR, 30)
+            << " C=" << get_bit(CPSR, 29)
+            << " V=" << get_bit(CPSR, 28) << std::endl;
+
+    indent_level--;
+    logFile << get_indent() << "}" << std::endl;
+}
+void Cpu::thumb_format_3(uint16_t opcode)
+{
+    logFile << get_indent() << "[THUMB Format 3 - Move/Compare/Add/Subtract Immediate] {" << std::endl;
+    indent_level++;
+
+    uint8_t operation = (opcode >> 11) & 0b11;
+    uint8_t Rd = (opcode >> 8) & 0b111;
+    uint8_t imm8 = opcode & 0xFF;
+
+    const char *opNames[] = {"MOV", "CMP", "ADD", "SUB"};
+    logFile << get_indent() << "Operação: " << opNames[operation] << std::endl;
+    logFile << get_indent() << "get_reg(" << (int)Rd << ") base: 0x" << std::hex << get_reg(Rd)
+            << " | Imediato (imm8): 0x" << (int)imm8 << std::dec << std::endl;
+
+    bool flagN = get_bit(CPSR, 31);
+    bool flagZ = get_bit(CPSR, 30);
+    bool flagC = get_bit(CPSR, 29);
+    bool flagV = get_bit(CPSR, 28);
+
+    uint32_t resultado;
+
+    switch (operation)
+    {
+    case 0b00:
+        resultado = imm8;
+        flagN = false;
+        break;
+
+    case 0b01:
+    case 0b11:
+        resultado = get_reg(Rd) - imm8;
+
+        flagN = get_bit(resultado, 31);
+        flagC = get_reg(Rd) >= imm8;
+        flagV = ((get_reg(Rd) ^ imm8) & (get_reg(Rd) ^ resultado)) >> 31;
+        break;
+
+    case 0b10:
+        resultado = get_reg(Rd) + imm8;
+
+        flagN = get_bit(resultado, 31);
+        flagC = resultado < get_reg(Rd);
+        flagV = (~(get_reg(Rd) ^ imm8) & (get_reg(Rd) ^ resultado)) >> 31;
+        break;
+
+    default:
+        break;
+    }
+
+    flagZ = resultado == 0;
+
+    if (operation != 0b01)
+    {
+        set_reg(Rd, resultado);
+        logFile << get_indent() << "Resultado: 0x" << std::hex << resultado
+                << " -> escrito em get_reg(" << std::dec << (int)Rd << ")" << std::endl;
+    }
+    else
+    {
+        logFile << get_indent() << "Resultado (CMP - sem escrita em get_reg(" << (int)Rd << ")): 0x"
+                << std::hex << resultado << std::dec << std::endl;
+    }
+
+    set_bit(CPSR, 31, flagN);
+    set_bit(CPSR, 30, flagZ);
+    set_bit(CPSR, 29, flagC);
+    set_bit(CPSR, 28, flagV);
+
+    logFile << get_indent() << "Flags (NZCV): N=" << get_bit(CPSR, 31)
+            << " Z=" << get_bit(CPSR, 30)
+            << " C=" << get_bit(CPSR, 29)
+            << " V=" << get_bit(CPSR, 28) << std::endl;
+
+    indent_level--;
+    logFile << get_indent() << "}" << std::endl;
+}
+void Cpu::thumb_format_4(uint16_t opcode)
+{
+    logFile << get_indent() << "[THUMB Format 4 - ALU Operations] {" << std::endl;
+    indent_level++;
+
+    uint8_t op = (opcode >> 6) & 0xF;
+    uint8_t Rs = (opcode >> 3) & 0b111;
+    uint8_t Rd = opcode & 0b111;
+
+    uint32_t op1 = get_reg(Rd);
+    uint32_t op2 = get_reg(Rs);
+    uint32_t resultado = 0;
+
+    const char *opNames[] = {
+        "AND", "EOR", "LSL", "LSR", "ASR", "ADC", "SBC", "ROR",
+        "TST", "NEG", "CMP", "CMN", "ORR", "MUL", "BIC", "MVN"};
+
+    logFile << get_indent() << "Operação: " << opNames[op] << std::endl;
+    logFile << get_indent() << "get_reg(" << (int)Rd << ") (op1): 0x" << std::hex << op1
+            << " | get_reg(" << std::dec << (int)Rs << ") (op2): 0x" << std::hex << op2 << std::dec << std::endl;
+
+    bool flagN = get_bit(CPSR, 31);
+    bool flagZ = get_bit(CPSR, 30);
+    bool flagC = get_bit(CPSR, 29);
+    bool flagV = get_bit(CPSR, 28);
+
+    bool writeResult = true; // TST, CMP e CMN não escrevem em Rd
+
+    switch (op)
+    {
+    // --- LÓGICAS (N, Z) ---
+    case 0x0: // AND
+        resultado = op1 & op2;
+        break;
+
+    case 0x1: // EOR
+        resultado = op1 ^ op2;
+        break;
+
+    case 0x8: // TST
+        resultado = op1 & op2;
+        writeResult = false;
+        break;
+
+    case 0xC: // ORR
+        resultado = op1 | op2;
+        break;
+
+    case 0xE: // BIC
+        resultado = op1 & (~op2);
+        break;
+
+    case 0xF: // MVN
+        resultado = ~op2;
+        break;
+
+    // --- SHIFTS POR REGISTRADOR (N, Z, C) ---
+    case 0x2: // LSL
+    case 0x3: // LSR
+    case 0x4: // ASR
+    case 0x7: // ROR
+    {
+        uint8_t shiftType = (op == 0x7) ? 0b11 : (op - 0x2);
+        uint8_t shiftAmount = op2 & 0xFF;
+
+        OpResult shiftRes = shift_barrier(shiftType, op1, shiftAmount, true, flagC);
+        resultado = shiftRes.result;
+        flagC = shiftRes.extra & 0x1;
+        break;
+    }
+
+    // --- ARITMÉTICAS (N, Z, C, V) ---
+    case 0x5: // ADC
+    {
+        uint64_t sum = (uint64_t)op1 + op2 + (flagC ? 1 : 0);
+        resultado = (uint32_t)sum;
+        flagC = sum > 0xFFFFFFFF;
+        flagV = (~(op1 ^ op2) & (op1 ^ resultado)) >> 31;
+        break;
+    }
+
+    case 0x6: // SBC
+    {
+        uint64_t sub = (uint64_t)op1 + (uint32_t)(~op2) + (flagC ? 1 : 0);
+        resultado = (uint32_t)sub;
+        flagC = sub >> 32;
+        flagV = ((op1 ^ op2) & (op1 ^ resultado)) >> 31;
+        break;
+    }
+
+    case 0x9: // NEG (0 - op2)
+        resultado = 0 - op2;
+        flagC = (op2 == 0);
+        flagV = (op2 & resultado) >> 31;
+        break;
+
+    case 0xA: // CMP
+        resultado = op1 - op2;
+        flagC = op1 >= op2;
+        flagV = ((op1 ^ op2) & (op1 ^ resultado)) >> 31;
+        writeResult = false;
+        break;
+
+    case 0xB: // CMN
+        resultado = op1 + op2;
+        flagC = resultado < op1;
+        flagV = (~(op1 ^ op2) & (op1 ^ resultado)) >> 31;
+        writeResult = false;
+        break;
+
+    // --- MULTIPLICAÇÃO (N, Z) ---
+    case 0xD: // MUL
+        resultado = op1 * op2;
+        break;
+    }
+
+    flagN = get_bit(resultado, 31);
+    flagZ = (resultado == 0);
+
+    if (writeResult)
+    {
+        set_reg(Rd, resultado);
+        logFile << get_indent() << "Resultado: 0x" << std::hex << resultado
+                << " -> escrito em get_reg(" << std::dec << (int)Rd << ")" << std::endl;
+    }
+    else
+    {
+        logFile << get_indent() << "Resultado (" << opNames[op] << " - sem escrita): 0x"
+                << std::hex << resultado << std::dec << std::endl;
+    }
+
+    set_bit(CPSR, 31, flagN);
+    set_bit(CPSR, 30, flagZ);
+    set_bit(CPSR, 29, flagC);
+    set_bit(CPSR, 28, flagV);
+
+    logFile << get_indent() << "Flags (NZCV): N=" << get_bit(CPSR, 31)
+            << " Z=" << get_bit(CPSR, 30)
+            << " C=" << get_bit(CPSR, 29)
+            << " V=" << get_bit(CPSR, 28) << std::endl;
+
+    indent_level--;
+    logFile << get_indent() << "}" << std::endl;
+}
+void Cpu::thumb_format_5(uint16_t opcode)
+{
+    logFile << get_indent() << "[THUMB Format 5 - Hi Register Ops / Branch Exchange] {" << std::endl;
+    indent_level++;
+
+    uint8_t operation = (opcode >> 8) & 0b11;
+    uint8_t Rs = (opcode >> 3) & 0xF;
+    uint8_t Rd = ((opcode >> 4) & 0x8) | (opcode & 0b111);
+
+    const char *opNames[] = {"ADD", "CMP", "MOV", "BX"};
+    logFile << get_indent() << "Operação: " << opNames[operation] << std::endl;
+    logFile << get_indent() << "get_reg(" << (int)Rd << ") destino: 0x" << std::hex << get_reg(Rd)
+            << " | get_reg(" << (int)Rs << ") origem: 0x" << get_reg(Rs) << std::dec << std::endl;
+
+    switch (operation)
+    {
+    case 0b00: // ADD
+        set_reg(Rd, get_reg(Rd) + get_reg(Rs));
+        if (Rd == 15)
+        {
+            set_reg(15, get_reg(15) & (~1U));
+        }
+        logFile << get_indent() << "Novo valor de get_reg(" << (int)Rd << "): 0x" << std::hex << get_reg(Rd) << std::dec << std::endl;
+        break;
+
+    case 0b01: // CMP
+    {
+        uint32_t resultado = get_reg(Rd) - get_reg(Rs);
+
+        bool flagN = get_bit(resultado, 31);
+        bool flagZ = (resultado == 0);
+        bool flagC = (get_reg(Rd) >= get_reg(Rs));
+        bool flagV = ((get_reg(Rd) ^ get_reg(Rs)) & (get_reg(Rd) ^ resultado)) >> 31;
+
+        set_bit(CPSR, 31, flagN);
+        set_bit(CPSR, 30, flagZ);
+        set_bit(CPSR, 29, flagC);
+        set_bit(CPSR, 28, flagV);
+
+        logFile << get_indent() << "Resultado CMP: 0x" << std::hex << resultado << std::dec << std::endl;
+        logFile << get_indent() << "Flags (NZCV): N=" << flagN << " Z=" << flagZ
+                << " C=" << flagC << " V=" << flagV << std::endl;
+        break;
+    }
+
+    case 0b10: // MOV
+        set_reg(Rd, get_reg(Rs));
+        if (Rd == 15)
+        {
+            set_reg(15, get_reg(15) & (~1U));
+        }
+        logFile << get_indent() << "Novo valor de get_reg(" << (int)Rd << "): 0x" << std::hex << get_reg(Rd) << std::dec << std::endl;
+        break;
+
+    case 0b11: // BX
+    {
+        uint32_t endereço = get_reg(Rs);
+        bool armMode = !get_bit(get_reg(Rs), 0);
+
+        if (get_bit(get_reg(Rs), 0))
+        {
+            set_reg(15, endereço & (~1U));
+            set_bit(CPSR, 5, 1);
+        }
+        else
+        {
+            set_reg(15, endereço & (~3U));
+            set_bit(CPSR, 5, 0);
+        }
+
+        logFile << get_indent() << "Desvio BX para 0x" << std::hex << get_reg(15) << std::dec
+                << " | Modo: " << (armMode ? "ARM" : "THUMB") << std::endl;
+        break;
+    }
+    default:
+        break;
+    }
+
+    indent_level--;
+    logFile << get_indent() << "}" << std::endl;
+}
+void Cpu::thumb_format_6(uint16_t opcode)
+{
+    logFile << get_indent() << "[THUMB Format 6 - PC-Relative Load] {" << std::endl;
+    indent_level++;
+
+    uint8_t Rd = (opcode >> 8) & 0b111;
+    uint32_t imm8 = opcode & 0xFF;
+
+    uint32_t pc_alinhado = get_reg(15) & ~2U;
+    uint32_t endereco = pc_alinhado + (imm8 << 2);
+
+    logFile << get_indent() << "Operação: LDR (PC-relative)" << std::endl;
+    logFile << get_indent() << "PC alinhado: 0x" << std::hex << pc_alinhado
+            << " | Offset: 0x" << (imm8 << 2) << " (imm8: 0x" << imm8 << ")" << std::dec << std::endl;
+    logFile << get_indent() << "Endereço final: 0x" << std::hex << endereco << std::dec << std::endl;
+
+    OpResult status = memoria->get32(endereco);
+    if (status.ok)
+    {
+        set_reg(Rd, status.result);
+        logFile << get_indent() << "Lido da memória: 0x" << std::hex << status.result
+                << std::dec << " -> escrito em get_reg(" << (int)Rd << ")" << std::endl;
+    }
+    else
+    {
+        logFile << get_indent() << "Falha ao ler o endereço: 0x" << std::hex << endereco << std::dec << std::endl;
+    }
+
+    indent_level--;
+    logFile << get_indent() << "}" << std::endl;
+}
+void Cpu::thumb_format_7(uint16_t opcode)
+{
+    logFile << get_indent() << "[THUMB Format 7 - Load/Store Register Offset] {" << std::endl;
+    indent_level++;
+
+    bool L = (opcode >> 11) & 1; // 1 = Load, 0 = Store
+    bool B = (opcode >> 10) & 1; // 1 = Byte, 0 = Word
+
+    uint8_t Ro = (opcode >> 6) & 0b111;
+    uint8_t Rb = (opcode >> 3) & 0b111;
+    uint8_t Rd = opcode & 0b111;
+
+    uint32_t endereco = get_reg(Rb) + get_reg(Ro);
+
+    logFile << get_indent() << "Operação: " << (L ? "LDR" : "STR") << (B ? "B" : "") << std::endl;
+    logFile << get_indent() << "get_reg(" << (int)Rb << ") base: 0x" << std::hex << get_reg(Rb)
+            << " | get_reg(" << (int)Ro << ") offset: 0x" << get_reg(Ro) << std::dec << std::endl;
+    logFile << get_indent() << "Endereço final: 0x" << std::hex << endereco << std::dec << std::endl;
+
+    if (L) // Operations: LDR / LDRB
+    {
+        OpResult status;
+        if (B)
+        {
+            status = memoria->get8(endereco); // LDRB (Zero-extended)
+            if (status.ok)
+            {
+                set_reg(Rd, status.result);
+                logFile << get_indent() << "Lido da memória (Byte): 0x" << std::hex << status.result
+                        << std::dec << " -> escrito em get_reg(" << (int)Rd << ")" << std::endl;
+            }
+            else
+            {
+                logFile << get_indent() << "Falha ao ler o endereço: 0x" << std::hex << endereco << std::dec << std::endl;
+            }
+        }
+        else
+        {
+            status = memoria->get32(endereco); // LDR
+            if (status.ok)
+            {
+                set_reg(Rd, status.result);
+                logFile << get_indent() << "Lido da memória (Word): 0x" << std::hex << status.result
+                        << std::dec << " -> escrito em get_reg(" << (int)Rd << ")" << std::endl;
+            }
+            else
+            {
+                logFile << get_indent() << "Falha ao ler o endereço: 0x" << std::hex << endereco << std::dec << std::endl;
+            }
+        }
+    }
+    else // Operations: STR / STRB
+    {
+        if (B)
+        {
+            memoria->set8(endereco, get_reg(Rd) & 0xFF); // STRB
+            logFile << get_indent() << "Escrito na memória (Byte): 0x" << std::hex << (get_reg(Rd) & 0xFF)
+                    << std::dec << " no endereço 0x" << std::hex << endereco << std::dec << std::endl;
+        }
+        else
+        {
+            memoria->set32(endereco, get_reg(Rd)); // STR
+            logFile << get_indent() << "Escrito na memória (Word): 0x" << std::hex << get_reg(Rd)
+                    << std::dec << " no endereço 0x" << std::hex << endereco << std::dec << std::endl;
+        }
+    }
+
+    indent_level--;
+    logFile << get_indent() << "}" << std::endl;
+}
+void Cpu::thumb_format_8(uint16_t opcode)
+{
+    logFile << get_indent() << "[THUMB Format 8 - Load/Store Sign-Extended Byte/Halfword] {" << std::endl;
+    indent_level++;
+
+    bool H = (opcode >> 11) & 1;
+    bool S = (opcode >> 10) & 1;
+    uint8_t Ro = (opcode >> 6) & 0b111;
+    uint8_t Rb = (opcode >> 3) & 0b111;
+    uint8_t Rd = opcode & 0b111;
+
+    uint32_t addr = get_reg(Rb) + get_reg(Ro);
+
+    const char *opName = (!S && !H) ? "STRH" : (!S && H) ? "LDRH"
+                                           : (S && !H)   ? "LDSB"
+                                                         : "LDSH";
+
+    logFile << get_indent() << "Operação: " << opName << std::endl;
+    logFile << get_indent() << "get_reg(" << (int)Rb << ") base: 0x" << std::hex << get_reg(Rb)
+            << " | get_reg(" << (int)Ro << ") offset: 0x" << get_reg(Ro) << std::dec << std::endl;
+    logFile << get_indent() << "Endereço final: 0x" << std::hex << addr << std::dec << std::endl;
+
+    if (!S && !H)
+    {
+        memoria->set16(addr, get_reg(Rd) & 0xFFFF);
+        logFile << get_indent() << "Escrito na memória (Halfword): 0x" << std::hex << (get_reg(Rd) & 0xFFFF)
+                << std::dec << " no endereço 0x" << std::hex << addr << std::dec << std::endl;
+    }
+    else if (!S && H)
+    {
+        OpResult status = memoria->get16(addr);
+        if (status.ok)
+        {
+            set_reg(Rd, status.result);
+            logFile << get_indent() << "Lido da memória (LDRH): 0x" << std::hex << status.result
+                    << std::dec << " -> escrito em get_reg(" << (int)Rd << ")" << std::endl;
+        }
+        else
+        {
+            logFile << get_indent() << "Falha ao ler o endereço: 0x" << std::hex << addr << std::dec << std::endl;
+        }
+    }
+    else if (S && !H)
+    {
+        OpResult status = memoria->get8(addr);
+        if (status.ok)
+        {
+            set_reg(Rd, (int32_t)(int8_t)status.result);
+            logFile << get_indent() << "Lido da memória com extensão de sinal (LDSB): 0x" << std::hex << get_reg(Rd)
+                    << std::dec << " -> escrito em get_reg(" << (int)Rd << ")" << std::endl;
+        }
+        else
+        {
+            logFile << get_indent() << "Falha ao ler o endereço: 0x" << std::hex << addr << std::dec << std::endl;
+        }
+    }
+    else if (S && H)
+    {
+        OpResult status = memoria->get16(addr);
+        if (status.ok)
+        {
+            set_reg(Rd, (int32_t)(int16_t)status.result);
+            logFile << get_indent() << "Lido da memória com extensão de sinal (LDSH): 0x" << std::hex << get_reg(Rd)
+                    << std::dec << " -> escrito em get_reg(" << (int)Rd << ")" << std::endl;
+        }
+        else
+        {
+            logFile << get_indent() << "Falha ao ler o endereço: 0x" << std::hex << addr << std::dec << std::endl;
+        }
+    }
+
+    indent_level--;
+    logFile << get_indent() << "}" << std::endl;
+}
+void Cpu::thumb_format_9(uint16_t opcode)
+{
+    logFile << get_indent() << "[THUMB Format 9 - Load/Store Immediate Offset] {" << std::endl;
+    indent_level++;
+
+    bool B = (opcode >> 12) & 1; // 0 = Word, 1 = Byte
+    bool L = (opcode >> 11) & 1; // 0 = Store, 1 = Load
+    uint32_t imm5 = (opcode >> 6) & 0x1F;
+    uint8_t Rb = (opcode >> 3) & 0b111;
+    uint8_t Rd = opcode & 0b111;
+
+    uint32_t offset = B ? imm5 : (imm5 << 2);
+    uint32_t addr = get_reg(Rb) + offset;
+
+    logFile << get_indent() << "Operação: " << (L ? "LDR" : "STR") << (B ? "B" : "") << std::endl;
+    logFile << get_indent() << "get_reg(" << (int)Rb << ") base: 0x" << std::hex << get_reg(Rb)
+            << " | Offset (Imediato): 0x" << offset << std::dec << std::endl;
+    logFile << get_indent() << "Endereço final: 0x" << std::hex << addr << std::dec << std::endl;
+
+    if (L)
+    {
+        if (B)
+        {
+            OpResult status = memoria->get8(addr);
+            if (status.ok)
+            {
+                set_reg(Rd, status.result);
+                logFile << get_indent() << "Lido da memória (Byte): 0x" << std::hex << status.result
+                        << std::dec << " -> escrito em get_reg(" << (int)Rd << ")" << std::endl;
+            }
+            else
+            {
+                logFile << get_indent() << "Falha ao ler o endereço: 0x" << std::hex << addr << std::dec << std::endl;
+            }
+        }
+        else
+        {
+            OpResult status = memoria->get32(addr);
+            if (status.ok)
+            {
+                set_reg(Rd, status.result);
+                logFile << get_indent() << "Lido da memória (Word): 0x" << std::hex << status.result
+                        << std::dec << " -> escrito em get_reg(" << (int)Rd << ")" << std::endl;
+            }
+            else
+            {
+                logFile << get_indent() << "Falha ao ler o endereço: 0x" << std::hex << addr << std::dec << std::endl;
+            }
+        }
+    }
+    else
+    {
+        if (B)
+        {
+            memoria->set8(addr, get_reg(Rd) & 0xFF);
+            logFile << get_indent() << "Escrito na memória (Byte): 0x" << std::hex << (get_reg(Rd) & 0xFF)
+                    << std::dec << " no endereço 0x" << std::hex << addr << std::dec << std::endl;
+        }
+        else
+        {
+            memoria->set32(addr, get_reg(Rd));
+            logFile << get_indent() << "Escrito na memória (Word): 0x" << std::hex << get_reg(Rd)
+                    << std::dec << " no endereço 0x" << std::hex << addr << std::dec << std::endl;
+        }
+    }
+
+    indent_level--;
+    logFile << get_indent() << "}" << std::endl;
+}
+void Cpu::thumb_format_10(uint16_t opcode)
+{
+    logFile << get_indent() << "[THUMB Format 10 - Load/Store Halfword Immediate Offset] {" << std::endl;
+    indent_level++;
+
+    bool L = (opcode >> 11) & 1;
+    uint32_t imm5 = (opcode >> 6) & 0x1F;
+    uint8_t Rb = (opcode >> 3) & 0b111;
+    uint8_t Rd = opcode & 0b111;
+
+    uint32_t offset = imm5 << 1;
+    uint32_t addr = get_reg(Rb) + offset;
+
+    logFile << get_indent() << "Operação: " << (L ? "LDRH" : "STRH") << std::endl;
+    logFile << get_indent() << "get_reg(" << (int)Rb << ") base: 0x" << std::hex << get_reg(Rb)
+            << " | Offset (Imediato): 0x" << offset << std::dec << std::endl;
+    logFile << get_indent() << "Endereço final: 0x" << std::hex << addr << std::dec << std::endl;
+
+    if (L)
+    {
+        OpResult status = memoria->get16(addr);
+        if (status.ok)
+        {
+            set_reg(Rd, status.result);
+            logFile << get_indent() << "Lido da memória (Halfword): 0x" << std::hex << status.result
+                    << std::dec << " -> escrito em get_reg(" << (int)Rd << ")" << std::endl;
+        }
+        else
+        {
+            logFile << get_indent() << "Falha ao ler o endereço: 0x" << std::hex << addr << std::dec << std::endl;
+        }
+    }
+    else
+    {
+        memoria->set16(addr, get_reg(Rd) & 0xFFFF);
+        logFile << get_indent() << "Escrito na memória (Halfword): 0x" << std::hex << (get_reg(Rd) & 0xFFFF)
+                << std::dec << " no endereço 0x" << std::hex << addr << std::dec << std::endl;
+    }
+
+    indent_level--;
+    logFile << get_indent() << "}" << std::endl;
+}
+void Cpu::thumb_format_11(uint16_t opcode)
+{
+    logFile << get_indent() << "[THUMB Format 11 - SP-Relative Load/Store] {" << std::endl;
+    indent_level++;
+
+    bool L = (opcode >> 11) & 1;
+    uint8_t Rd = (opcode >> 8) & 0b111;
+    uint32_t imm8 = opcode & 0xFF;
+
+    uint32_t offset = imm8 << 2;
+    uint32_t addr = get_reg(13) + offset;
+
+    logFile << get_indent() << "Operação: " << (L ? "LDR" : "STR") << " (SP-relative)" << std::endl;
+    logFile << get_indent() << "SP (R13) base: 0x" << std::hex << get_reg(13)
+            << " | Offset (Imediato): 0x" << offset << std::dec << std::endl;
+    logFile << get_indent() << "Endereço final: 0x" << std::hex << addr << std::dec << std::endl;
+
+    if (L)
+    {
+        OpResult status = memoria->get32(addr);
+        if (status.ok)
+        {
+            set_reg(Rd, status.result);
+            logFile << get_indent() << "Lido da memória: 0x" << std::hex << status.result
+                    << std::dec << " -> escrito em get_reg(" << (int)Rd << ")" << std::endl;
+        }
+        else
+        {
+            logFile << get_indent() << "Falha ao ler o endereço: 0x" << std::hex << addr << std::dec << std::endl;
+        }
+    }
+    else
+    {
+        memoria->set32(addr, get_reg(Rd));
+        logFile << get_indent() << "Escrito na memória: 0x" << std::hex << get_reg(Rd)
+                << std::dec << " no endereço 0x" << std::hex << addr << std::dec << std::endl;
+    }
+
+    indent_level--;
+    logFile << get_indent() << "}" << std::endl;
+}
+void Cpu::thumb_format_12(uint16_t opcode)
+{
+    logFile << get_indent() << "[THUMB Format 12 - Get Relative Address] {" << std::endl;
+    indent_level++;
+
+    bool isSP = (opcode >> 11) & 1;
+    uint8_t Rd = (opcode >> 8) & 0b111;
+    uint32_t imm8 = opcode & 0xFF;
+    uint32_t offset = imm8 << 2;
+
+    uint32_t base = 0;
+    if (isSP)
+    {
+        base = get_reg(13);
+    }
+    else
+    {
+        base = get_reg(15) & ~2U;
+    }
+
+    uint32_t resultado = base + offset;
+    set_reg(Rd, resultado);
+
+    logFile << get_indent() << "Operação: ADD R" << (int)Rd << ", " << (isSP ? "SP" : "PC") << ", #0x" << std::hex << offset << std::dec << std::endl;
+    logFile << get_indent() << "Base (" << (isSP ? "SP" : "PC alinhado") << "): 0x" << std::hex << base << std::dec << std::endl;
+    logFile << get_indent() << "Resultado: 0x" << std::hex << resultado << std::dec << " -> escrito em get_reg(" << (int)Rd << ")" << std::endl;
+
+    indent_level--;
+    logFile << get_indent() << "}" << std::endl;
+}
+void Cpu::thumb_format_13(uint16_t opcode)
+{
+    logFile << get_indent() << "[THUMB Format 13 - Add/Subtract Offset to Stack Pointer] {" << std::endl;
+    indent_level++;
+
+    bool isSub = (opcode >> 7) & 1;
+    uint32_t imm7 = opcode & 0x7F;
+    uint32_t offset = imm7 << 2;
+
+    logFile << get_indent() << "Operação: " << (isSub ? "SUB" : "ADD") << " SP, #0x" << std::hex << offset << std::dec << std::endl;
+    logFile << get_indent() << "SP (R13) anterior: 0x" << std::hex << get_reg(13) << std::dec << std::endl;
+
+    if (isSub)
+    {
+        set_reg(13, get_reg(13) - (offset));
+    }
+    else
+    {
+        set_reg(13, get_reg(13) + (offset));
+    }
+
+    logFile << get_indent() << "SP (R13) atualizado: 0x" << std::hex << get_reg(13) << std::dec << std::endl;
+
+    indent_level--;
+    logFile << get_indent() << "}" << std::endl;
+}
+void Cpu::thumb_format_14(uint16_t opcode)
+{
+    logFile << get_indent() << "[THUMB Format 14 - Push/Pop Registers] {" << std::endl;
+    indent_level++;
+
+    bool isPop = (opcode >> 11) & 1;
+    bool storeLR_loadPC = (opcode >> 8) & 1;
+    uint8_t regList = opcode & 0xFF;
+
+    logFile << get_indent() << "Operação: " << (isPop ? "POP" : "PUSH") << std::endl;
+    logFile << get_indent() << "SP (R13) inicial: 0x" << std::hex << get_reg(13) << std::dec << std::endl;
+
+    if (!isPop) // PUSH
+    {
+        if (storeLR_loadPC)
+        {
+            set_reg(13, get_reg(13) - (4));
+            memoria->set32(get_reg(13), get_reg(14));
+            logFile << get_indent() << "PUSH R14 (LR): 0x" << std::hex << get_reg(14) << " em 0x" << get_reg(13) << std::dec << std::endl;
+        }
+        for (int i = 7; i >= 0; i--)
+        {
+            if ((regList >> i) & 1)
+            {
+                set_reg(13, get_reg(13) - (4));
+                memoria->set32(get_reg(13), get_reg(i));
+                logFile << get_indent() << "PUSH get_reg(" << i << "): 0x" << std::hex << get_reg(i) << " em 0x" << get_reg(13) << std::dec << std::endl;
+            }
+        }
+    }
+    else // POP
+    {
+        for (int i = 0; i <= 7; i++)
+        {
+            if ((regList >> i) & 1)
+            {
+                OpResult status = memoria->get32(get_reg(13));
+                if (status.ok)
+                {
+                    set_reg(i, status.result);
+                    logFile << get_indent() << "POP get_reg(" << i << "): 0x" << std::hex << get_reg(i) << " de 0x" << get_reg(13) << std::dec << std::endl;
+                }
+                set_reg(13, get_reg(13) + (4));
+            }
+        }
+        if (storeLR_loadPC)
+        {
+            OpResult status = memoria->get32(get_reg(13));
+            if (status.ok)
+            {
+                set_reg(15, status.result & ~1U);
+                logFile << get_indent() << "POP PC (R15): 0x" << std::hex << get_reg(15) << " de 0x" << get_reg(13) << std::dec << std::endl;
+            }
+            set_reg(13, get_reg(13) + (4));
+        }
+    }
+
+    logFile << get_indent() << "SP (R13) final: 0x" << std::hex << get_reg(13) << std::dec << std::endl;
+
+    indent_level--;
+    logFile << get_indent() << "}" << std::endl;
+}
+void Cpu::thumb_format_15(uint16_t opcode)
+{
+    logFile << get_indent() << "[THUMB Format 15 - Multiple Load/Store] {" << std::endl;
+    indent_level++;
+
+    bool isLoad = (opcode >> 11) & 1;
+    uint8_t Rb = (opcode >> 8) & 0b111;
+    uint8_t regList = opcode & 0xFF;
+
+    uint32_t addr = get_reg(Rb);
+
+    logFile << get_indent() << "Operação: " << (isLoad ? "LDMIA" : "STMIA") << std::endl;
+    logFile << get_indent() << "get_reg(" << (int)Rb << ") base inicial: 0x" << std::hex << addr << std::dec << std::endl;
+
+    for (int i = 0; i <= 7; i++)
+    {
+        if ((regList >> i) & 1)
+        {
+            if (isLoad)
+            {
+                OpResult status = memoria->get32(addr);
+                if (status.ok)
+                {
+                    set_reg(i, status.result);
+                    logFile << get_indent() << "Lido da memória 0x" << std::hex << addr << ": 0x" << get_reg(i) << " -> escrito em get_reg(" << std::dec << i << ")" << std::endl;
+                }
+            }
+            else
+            {
+                memoria->set32(addr, get_reg(i));
+                logFile << get_indent() << "Escrito na memória 0x" << std::hex << addr << ": get_reg(" << std::dec << i << ") (0x" << std::hex << get_reg(i) << ")" << std::endl;
+            }
+            addr += 4;
+        }
+    }
+    set_reg(Rb, addr);
+    logFile << get_indent() << "Writeback get_reg(" << (int)Rb << ") atualizado para 0x" << std::hex << get_reg(Rb) << std::dec << std::endl;
+
+    indent_level--;
+    logFile << get_indent() << "}" << std::endl;
+}
+void Cpu::thumb_format_16(uint16_t opcode)
+{
+    logFile << get_indent() << "[THUMB Format 16 - Conditional Branch] {" << std::endl;
+    indent_level++;
+
+    uint8_t cond = (opcode >> 8) & 0xF;
+    int32_t offset = (int8_t)(opcode & 0xFF);
+
+    if (cond == 0xF)
+    {
+        indent_level--;
+        logFile << get_indent() << "}" << std::endl;
+        return; // SWI (Formato 17)
+    }
+
+    const char *condNames[] = {
+        "EQ", "NE", "CS", "CC", "MI", "PL", "VS", "VC",
+        "HI", "LS", "GE", "LT", "GT", "LE", "AL", "NV"};
+
+    bool satisfeita = checar_condicao((cond << 28));
+    logFile << get_indent() << "Condição: " << condNames[cond] << " (" << (satisfeita ? "Verdadeira" : "Falsa") << ")" << std::endl;
+    logFile << get_indent() << "Offset: " << (offset << 1) << " bytes" << std::endl;
+
+    if (satisfeita)
+    {
+        set_reg(15, get_reg(15) + ((offset << 1)));
+        logFile << get_indent() << "Desvio realizado -> Novo PC: 0x" << std::hex << R[15] << std::dec << std::endl;
+    }
+    else
+    {
+        logFile << get_indent() << "Desvio não realizado" << std::endl;
+    }
+
+    indent_level--;
+    logFile << get_indent() << "}" << std::endl;
+}
+void Cpu::thumb_format_17(uint16_t opcode)
+{
+    logFile << get_indent() << "[THUMB Format 17 - Software Interrupt (SWI)] {" << std::endl;
+    indent_level++;
+
+    uint8_t comment = opcode & 0xFF;
+    logFile << get_indent() << "[A FAZER] SWI THUMB executado (Comentário/Vetor: 0x" << std::hex << (int)comment << std::dec << ")" << std::endl;
+
+    opcode += 1;
+
+    indent_level--;
+    logFile << get_indent() << "}" << std::endl;
+}
+void Cpu::thumb_format_18(uint16_t opcode)
+{
+    logFile << get_indent() << "[THUMB Format 18 - Unconditional Branch] {" << std::endl;
+    indent_level++;
+
+    int16_t imm11 = opcode & 0x7FF;
+    if (imm11 & 0x400)
+    {
+        imm11 |= 0xF800;
+    }
+
+    int32_t offset = (int32_t)imm11 << 1;
+
+    logFile << get_indent() << "Offset do desvio: " << offset << " bytes" << std::endl;
+    set_reg(15, get_reg(15) + (offset));
+    logFile << get_indent() << "Novo PC: 0x" << std::hex << get_reg(15) << std::dec << std::endl;
+
+    indent_level--;
+    logFile << get_indent() << "}" << std::endl;
+}
+void Cpu::thumb_format_19(uint16_t opcode)
+{
+    logFile << get_indent() << "[THUMB Format 19 - Long Branch with Link (BL)] {" << std::endl;
+    indent_level++;
+
+    bool H = (opcode >> 11) & 1;
+    uint32_t offset11 = opcode & 0x7FF;
+
+    logFile << get_indent() << "Etapa: " << (H ? "Parte 2 (Segunda instrução)" : "Parte 1 (Primeira instrução)") << std::endl;
+
+    if (!H)
+    {
+        int32_t off = offset11;
+        if (off & 0x400)
+        {
+            off |= 0xFFFFF800;
+        }
+        set_reg(14, get_reg(15) + (off << 12));
+        logFile << get_indent() << "Offset alto (sign-extended): " << (off << 12) << std::endl;
+        logFile << get_indent() << "LR (R14) pré-calculado: 0x" << std::hex << get_reg(14) << std::dec << std::endl;
+    }
+    else
+    {
+        uint32_t next_pc = get_reg(14) + (offset11 << 1);
+        set_reg(14, (get_reg(15) - 2) | 1);
+        set_reg(15, next_pc & ~1U);
+
+        logFile << get_indent() << "Endereço de retorno salvo em LR (R14): 0x" << std::hex << get_reg(14) << std::dec << std::endl;
+        logFile << get_indent() << "Novo PC (R15): 0x" << std::hex << get_reg(15) << std::dec << std::endl;
+    }
+
+    indent_level--;
+    logFile << get_indent() << "}" << std::endl;
+}
+void Cpu::step_thumb()
+{
+    // Fetch da instrução (16 bits) no PC atual e avanço do PC em +2
+    uint16_t opcode = memoria->get16(R[15]).result;
+    uint32_t pc_atual = R[15];
+
+    logFile << get_indent() << "[STEP THUMB] {" << std::endl;
+    indent_level++;
+    logFile << get_indent() << "PC atual: 0x" << std::hex << pc_atual << std::dec << std::endl;
+    logFile << get_indent() << "Opcode lido: 0x" << std::hex << opcode << std::dec << std::endl;
+
+    // Decodificação rápida usando os 5 bits superiores (15..11)
+    uint8_t top5 = opcode >> 11;
+
+    switch (top5)
+    {
+    case 0x00:
+    case 0x01:
+    case 0x02:
+        thumb_format_1(opcode);
+        break;
+
+    case 0x03:
+        thumb_format_2(opcode);
+        break;
+
+    case 0x04:
+    case 0x05:
+    case 0x06:
+    case 0x07:
+        thumb_format_3(opcode);
+        break;
+
+    case 0x08:
+        if ((opcode & 0x0400) == 0)
+        {
+            thumb_format_4(opcode);
+        }
+        else
+        {
+            thumb_format_5(opcode);
+        }
+        break;
+
+    case 0x09:
+        thumb_format_6(opcode);
+        break;
+
+    case 0x0A:
+    case 0x0B:
+        if ((opcode & 0x0200) == 0)
+        {
+            thumb_format_7(opcode);
+        }
+        else
+        {
+            thumb_format_8(opcode);
+        }
+        break;
+
+    case 0x0C:
+    case 0x0D:
+    case 0x0E:
+    case 0x0F:
+        thumb_format_9(opcode);
+        break;
+
+    case 0x10:
+    case 0x11:
+        thumb_format_10(opcode);
+        break;
+
+    case 0x12:
+    case 0x13:
+        thumb_format_11(opcode);
+        break;
+
+    case 0x14:
+    case 0x15:
+        thumb_format_12(opcode);
+        break;
+
+    case 0x16:
+    case 0x17:
+        if ((opcode & 0xFF00) == 0xB000)
+        {
+            thumb_format_13(opcode);
+        }
+        else if ((opcode & 0xF600) == 0xB400)
+        {
+            thumb_format_14(opcode);
+        }
+        break;
+
+    case 0x18:
+    case 0x19:
+        thumb_format_15(opcode);
+        break;
+
+    case 0x1A:
+    case 0x1B:
+        if ((opcode & 0xFF00) == 0xDF00)
+        {
+            thumb_format_17(opcode);
+        }
+        else
+        {
+            thumb_format_16(opcode);
+        }
+        break;
+
+    case 0x1C:
+        thumb_format_18(opcode);
+        break;
+
+    case 0x1E:
+    case 0x1F:
+        thumb_format_19(opcode);
+        break;
+
+    default:
+        logFile << get_indent() << "[ERRO CPU] Opcode THUMB nao mapeado: 0x" << std::hex << opcode
+                << " no PC: 0x" << pc_atual << std::dec << std::endl;
+        break;
+    }
+
+    if (!pc_alterado)
+    {
+        R[15] = R[15] + 2;
+    }
+
+    indent_level--;
+    logFile << get_indent() << "}" << std::endl;
+}
+
+void Cpu::step()
+{
+    pc_alterado = false;
+    if (get_bit(CPSR, 5))
+    {
+        step_thumb();
+    }
+    else
+    {
+        step_arm();
+    }
+}
+void Cpu::set_r(uint8_t index, uint32_t value)
+{
+    if (index < 16)
+    {
+        set_reg(index, value);
+    }
+    else if (index == 16)
+    {
+        CPSR = value;
+    }
+}
+uint32_t Cpu::get_r(uint8_t index)
+{
+    if (index < 16)
+    {
+        return get_reg(index);
+    }
+    else if (index == 16)
+    {
+        return CPSR;
+    }
+    return 0;
 }

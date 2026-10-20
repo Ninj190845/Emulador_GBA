@@ -38,5 +38,6 @@ struct Mem
     void set32(uint32_t endereço, uint32_t valor);
 
     physicalAddr silent_resolve_addr(uint32_t endereço);
+    void poke16(uint32_t endereço, uint16_t valor);
     void poke32(uint32_t endereço, uint32_t valor);
 };

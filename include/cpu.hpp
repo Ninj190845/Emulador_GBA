@@ -27,19 +27,46 @@ private:
 
     Mem *memoria = nullptr;
 
+    bool pc_alterado = false;
+
+    void set_reg(uint8_t index, uint32_t valor);
+    uint32_t get_reg(uint8_t index);
+
     OpResult shift_barrier(uint32_t shiftType, uint32_t valor, uint8_t count, bool origemImediato, bool flagC);
     bool checar_condicao(uint32_t opcode);
 
-    void alu(uint32_t opcode);
-    void mul(uint32_t opcode);
-    void branch(uint32_t opcode);
-    void blx(uint32_t opcode);
-    void msr(uint32_t opcode);
-    void mrs(uint32_t opcode);
-    void sdt(uint32_t opcode);
-    void hw_s(uint32_t opcode);
-    void bdt(uint32_t opcode);
-    void swp(uint32_t opcode);
+    void arm_alu(uint32_t opcode);
+    void arm_mul(uint32_t opcode);
+    void arm_branch(uint32_t opcode);
+    void arm_bx(uint32_t opcode);
+    void arm_msr(uint32_t opcode);
+    void arm_mrs(uint32_t opcode);
+    void arm_sdt(uint32_t opcode);
+    void arm_hw_s(uint32_t opcode);
+    void arm_bdt(uint32_t opcode);
+    void arm_swp(uint32_t opcode);
+    void step_arm();
+
+    void thumb_format_1(uint16_t opcode);
+    void thumb_format_2(uint16_t opcode);
+    void thumb_format_3(uint16_t opcode);
+    void thumb_format_4(uint16_t opcode);
+    void thumb_format_5(uint16_t opcode);
+    void thumb_format_6(uint16_t opcode);
+    void thumb_format_7(uint16_t opcode);
+    void thumb_format_8(uint16_t opcode);
+    void thumb_format_9(uint16_t opcode);
+    void thumb_format_10(uint16_t opcode);
+    void thumb_format_11(uint16_t opcode);
+    void thumb_format_12(uint16_t opcode);
+    void thumb_format_13(uint16_t opcode);
+    void thumb_format_14(uint16_t opcode);
+    void thumb_format_15(uint16_t opcode);
+    void thumb_format_16(uint16_t opcode);
+    void thumb_format_17(uint16_t opcode);
+    void thumb_format_18(uint16_t opcode);
+    void thumb_format_19(uint16_t opcode);
+    void step_thumb();
 
 public:
     Cpu(Mem *mem);

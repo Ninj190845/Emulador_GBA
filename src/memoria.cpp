@@ -22,12 +22,12 @@ std::string get_indent_mem()
 
 physicalAddr Mem::resolve_addr(uint32_t endereço)
 {
-    logFileMem << get_indent_mem() << "[Mem::resolve_addr] {\n";
+    logFileMem << get_indent_mem() << "[Mem::resolve_addr] {" << std::endl;
     indent_levelMem++;
 
     uint8_t seção = (endereço >> 24) & 0xFF;
     logFileMem << get_indent_mem() << "Endereço Solicitado: 0x" << std::hex << endereço << std::dec
-               << " (Seção: 0x" << std::hex << +seção << std::dec << ")\n";
+               << " (Seção: 0x" << std::hex << +seção << std::dec << ")" << std::endl;
 
     physicalAddr res;
     const char *regiao = "Desconhecida / Inválida";
@@ -61,7 +61,7 @@ physicalAddr Mem::resolve_addr(uint32_t endereço)
         if (off >= 0x18000)
         {
             off -= 0x8000;
-            logFileMem << get_indent_mem() << "Ajuste de Mirroring VRAM (off >= 0x18000 -> offset -0x8000)\n";
+            logFileMem << get_indent_mem() << "Ajuste de Mirroring VRAM (off >= 0x18000 -> offset -0x8000)" << std::endl;
         }
         res = {vram, off};
         break;
@@ -89,12 +89,12 @@ physicalAddr Mem::resolve_addr(uint32_t endereço)
         break;
     }
 
-    logFileMem << get_indent_mem() << "Região Mapeada: " << regiao << "\n";
-    logFileMem << get_indent_mem() << "Endereço Mascarado: 0x" << std::hex << res.endereçoMascarado << std::dec << "\n";
-    logFileMem << get_indent_mem() << "Ponteiro Válido: " << (res.ponteiro ? "True" : "False") << "\n";
+    logFileMem << get_indent_mem() << "Região Mapeada: " << regiao << std::endl;
+    logFileMem << get_indent_mem() << "Endereço Mascarado: 0x" << std::hex << res.endereçoMascarado << std::dec << std::endl;
+    logFileMem << get_indent_mem() << "Ponteiro Válido: " << (res.ponteiro ? "True" : "False") << std::endl;
 
     indent_levelMem--;
-    logFileMem << get_indent_mem() << "}\n";
+    logFileMem << get_indent_mem() << "}" << std::endl;
 
     return res;
 }
@@ -102,18 +102,18 @@ physicalAddr Mem::resolve_addr(uint32_t endereço)
 // Funções de Leitura
 OpResult Mem::get8(uint32_t endereço)
 {
-    logFileMem << get_indent_mem() << "[Mem::get8] {\n";
+    logFileMem << get_indent_mem() << "[Mem::get8] {" << std::endl;
     indent_levelMem++;
 
-    logFileMem << get_indent_mem() << "Endereço Solicitado: 0x" << std::hex << endereço << std::dec << "\n";
+    logFileMem << get_indent_mem() << "Endereço Solicitado: 0x" << std::hex << endereço << std::dec << std::endl;
 
     physicalAddr addr = resolve_addr(endereço);
     if (!addr.ponteiro)
     {
-        logFileMem << get_indent_mem() << "Erro: Ponteiro inválido (Falha no mapeamento de memória)\n";
-        logFileMem << get_indent_mem() << "Sucesso: False\n";
+        logFileMem << get_indent_mem() << "Erro: Ponteiro inválido (Falha no mapeamento de memória)" << std::endl;
+        logFileMem << get_indent_mem() << "Sucesso: False" << std::endl;
         indent_levelMem--;
-        logFileMem << get_indent_mem() << "}\n";
+        logFileMem << get_indent_mem() << "}" << std::endl;
         return {0, 0, false};
     }
 
@@ -127,31 +127,32 @@ OpResult Mem::get8(uint32_t endereço)
 
     uint8_t valor = addr.ponteiro[addr.endereçoMascarado];
 
-    logFileMem << get_indent_mem() << "Seção: 0x" << std::hex << +seção << std::dec << "\n";
-    logFileMem << get_indent_mem() << "Endereço Mascarado: 0x" << std::hex << addr.endereçoMascarado << std::dec << "\n";
-    logFileMem << get_indent_mem() << "Ciclos: " << +ciclos << "\n";
-    logFileMem << get_indent_mem() << "Valor Lido: 0x" << std::hex << +valor << std::dec << " (" << +valor << ")\n";
-    logFileMem << get_indent_mem() << "Sucesso: True\n";
+    logFileMem << get_indent_mem() << "Seção: 0x" << std::hex << +seção << std::dec << std::endl;
+    logFileMem << get_indent_mem() << "Endereço Mascarado: 0x" << std::hex << addr.endereçoMascarado << std::dec << std::endl;
+    logFileMem << get_indent_mem() << "Ciclos: " << +ciclos << std::endl;
+    logFileMem << get_indent_mem() << "Valor Lido: 0x" << std::hex << +valor << std::dec << " (" << +valor << ")" << std::endl;
+    logFileMem << get_indent_mem() << "Sucesso: True" << std::endl;
 
     indent_levelMem--;
-    logFileMem << get_indent_mem() << "}\n";
+    logFileMem << get_indent_mem() << "}" << std::endl;
 
     return {valor, ciclos, true};
 }
+
 OpResult Mem::get16(uint32_t endereço)
 {
-    logFileMem << get_indent_mem() << "[Mem::get16] {\n";
+    logFileMem << get_indent_mem() << "[Mem::get16] {" << std::endl;
     indent_levelMem++;
 
-    logFileMem << get_indent_mem() << "Endereço Solicitado: 0x" << std::hex << endereço << std::dec << "\n";
+    logFileMem << get_indent_mem() << "Endereço Solicitado: 0x" << std::hex << endereço << std::dec << std::endl;
 
     physicalAddr addr = resolve_addr(endereço);
     if (!addr.ponteiro)
     {
-        logFileMem << get_indent_mem() << "Erro: Ponteiro inválido (Falha no mapeamento de memória)\n";
-        logFileMem << get_indent_mem() << "Sucesso: False\n";
+        logFileMem << get_indent_mem() << "Erro: Ponteiro inválido (Falha no mapeamento de memória)" << std::endl;
+        logFileMem << get_indent_mem() << "Sucesso: False" << std::endl;
         indent_levelMem--;
-        logFileMem << get_indent_mem() << "}\n";
+        logFileMem << get_indent_mem() << "}" << std::endl;
         return {0, 0, false};
     }
 
@@ -163,9 +164,9 @@ OpResult Mem::get16(uint32_t endereço)
     else if (seção == 0x02)
         ciclos = 3;
 
-    logFileMem << get_indent_mem() << "Seção: 0x" << std::hex << +seção << std::dec << "\n";
-    logFileMem << get_indent_mem() << "Endereço Mascarado: 0x" << std::hex << addr.endereçoMascarado << std::dec << "\n";
-    logFileMem << get_indent_mem() << "Ciclos: " << +ciclos << "\n";
+    logFileMem << get_indent_mem() << "Seção: 0x" << std::hex << +seção << std::dec << std::endl;
+    logFileMem << get_indent_mem() << "Endereço Mascarado: 0x" << std::hex << addr.endereçoMascarado << std::dec << std::endl;
+    logFileMem << get_indent_mem() << "Ciclos: " << +ciclos << std::endl;
 
     if (seção >= 0x0E)
     {
@@ -173,12 +174,12 @@ OpResult Mem::get16(uint32_t endereço)
         uint16_t valor = (uint16_t)((b << 8) | b);
 
         logFileMem << get_indent_mem() << "Tratamento Especial (Seção >= 0x0E - Duplicando byte 0x"
-                   << std::hex << +b << std::dec << ")\n";
-        logFileMem << get_indent_mem() << "Valor Lido: 0x" << std::hex << valor << std::dec << " (" << valor << ")\n";
-        logFileMem << get_indent_mem() << "Sucesso: True\n";
+                   << std::hex << +b << std::dec << ")" << std::endl;
+        logFileMem << get_indent_mem() << "Valor Lido: 0x" << std::hex << valor << std::dec << " (" << valor << ")" << std::endl;
+        logFileMem << get_indent_mem() << "Sucesso: True" << std::endl;
 
         indent_levelMem--;
-        logFileMem << get_indent_mem() << "}\n";
+        logFileMem << get_indent_mem() << "}" << std::endl;
 
         return {valor, ciclos, true};
     }
@@ -186,29 +187,30 @@ OpResult Mem::get16(uint32_t endereço)
     uint32_t base = addr.endereçoMascarado & ~1;
     uint16_t valor = addr.ponteiro[base] | (addr.ponteiro[base + 1] << 8);
 
-    logFileMem << get_indent_mem() << "Base Alinhada (16-bit): 0x" << std::hex << base << std::dec << "\n";
-    logFileMem << get_indent_mem() << "Valor Lido: 0x" << std::hex << valor << std::dec << " (" << valor << ")\n";
-    logFileMem << get_indent_mem() << "Sucesso: True\n";
+    logFileMem << get_indent_mem() << "Base Alinhada (16-bit): 0x" << std::hex << base << std::dec << std::endl;
+    logFileMem << get_indent_mem() << "Valor Lido: 0x" << std::hex << valor << std::dec << " (" << valor << ")" << std::endl;
+    logFileMem << get_indent_mem() << "Sucesso: True" << std::endl;
 
     indent_levelMem--;
-    logFileMem << get_indent_mem() << "}\n";
+    logFileMem << get_indent_mem() << "}" << std::endl;
 
     return {valor, ciclos, true};
 }
+
 OpResult Mem::get32(uint32_t endereço)
 {
-    logFileMem << get_indent_mem() << "[Mem::get32] {\n";
+    logFileMem << get_indent_mem() << "[Mem::get32] {" << std::endl;
     indent_levelMem++;
 
-    logFileMem << get_indent_mem() << "Endereço Solicitado: 0x" << std::hex << endereço << std::dec << "\n";
+    logFileMem << get_indent_mem() << "Endereço Solicitado: 0x" << std::hex << endereço << std::dec << std::endl;
 
     physicalAddr addr = resolve_addr(endereço);
     if (!addr.ponteiro)
     {
-        logFileMem << get_indent_mem() << "Erro: Ponteiro inválido (Falha no mapeamento de memória)\n";
-        logFileMem << get_indent_mem() << "Sucesso: False\n";
+        logFileMem << get_indent_mem() << "Erro: Ponteiro inválido (Falha no mapeamento de memória)" << std::endl;
+        logFileMem << get_indent_mem() << "Sucesso: False" << std::endl;
         indent_levelMem--;
-        logFileMem << get_indent_mem() << "}\n";
+        logFileMem << get_indent_mem() << "}" << std::endl;
         return {0, 0, false};
     }
 
@@ -222,9 +224,9 @@ OpResult Mem::get32(uint32_t endereço)
     else if (seção == 0x05 || seção == 0x06)
         ciclos = 2;
 
-    logFileMem << get_indent_mem() << "Seção: 0x" << std::hex << +seção << std::dec << "\n";
-    logFileMem << get_indent_mem() << "Endereço Mascarado: 0x" << std::hex << addr.endereçoMascarado << std::dec << "\n";
-    logFileMem << get_indent_mem() << "Ciclos: " << +ciclos << "\n";
+    logFileMem << get_indent_mem() << "Seção: 0x" << std::hex << +seção << std::dec << std::endl;
+    logFileMem << get_indent_mem() << "Endereço Mascarado: 0x" << std::hex << addr.endereçoMascarado << std::dec << std::endl;
+    logFileMem << get_indent_mem() << "Ciclos: " << +ciclos << std::endl;
 
     if (seção >= 0x0E)
     {
@@ -232,12 +234,12 @@ OpResult Mem::get32(uint32_t endereço)
         uint32_t valor = (b << 24) | (b << 16) | (b << 8) | b;
 
         logFileMem << get_indent_mem() << "Tratamento Especial (Seção >= 0x0E - Replicando byte 0x"
-                   << std::hex << +b << std::dec << " nos 4 bytes)\n";
-        logFileMem << get_indent_mem() << "Valor Lido: 0x" << std::hex << valor << std::dec << " (" << valor << ")\n";
-        logFileMem << get_indent_mem() << "Sucesso: True\n";
+                   << std::hex << +b << std::dec << " nos 4 bytes)" << std::endl;
+        logFileMem << get_indent_mem() << "Valor Lido: 0x" << std::hex << valor << std::dec << " (" << valor << ")" << std::endl;
+        logFileMem << get_indent_mem() << "Sucesso: True" << std::endl;
 
         indent_levelMem--;
-        logFileMem << get_indent_mem() << "}\n";
+        logFileMem << get_indent_mem() << "}" << std::endl;
 
         return {valor, ciclos, true};
     }
@@ -248,12 +250,12 @@ OpResult Mem::get32(uint32_t endereço)
                      ((uint32_t)addr.ponteiro[base + 2] << 16) |
                      ((uint32_t)addr.ponteiro[base + 3] << 24);
 
-    logFileMem << get_indent_mem() << "Base Alinhada (32-bit): 0x" << std::hex << base << std::dec << "\n";
-    logFileMem << get_indent_mem() << "Valor Lido: 0x" << std::hex << valor << std::dec << " (" << valor << ")\n";
-    logFileMem << get_indent_mem() << "Sucesso: True\n";
+    logFileMem << get_indent_mem() << "Base Alinhada (32-bit): 0x" << std::hex << base << std::dec << std::endl;
+    logFileMem << get_indent_mem() << "Valor Lido: 0x" << std::hex << valor << std::dec << " (" << valor << ")" << std::endl;
+    logFileMem << get_indent_mem() << "Sucesso: True" << std::endl;
 
     indent_levelMem--;
-    logFileMem << get_indent_mem() << "}\n";
+    logFileMem << get_indent_mem() << "}" << std::endl;
 
     return {valor, ciclos, true};
 }
@@ -261,133 +263,135 @@ OpResult Mem::get32(uint32_t endereço)
 // Funções de Escrita
 void Mem::set8(uint32_t endereço, uint8_t valor)
 {
-    logFileMem << get_indent_mem() << "[Mem::set8] {\n";
+    logFileMem << get_indent_mem() << "[Mem::set8] {" << std::endl;
     indent_levelMem++;
 
-    logFileMem << get_indent_mem() << "Endereço Solicitado: 0x" << std::hex << endereço << std::dec << "\n";
+    logFileMem << get_indent_mem() << "Endereço Solicitado: 0x" << std::hex << endereço << std::dec << std::endl;
     logFileMem << get_indent_mem() << "Valor para Escrita: 0x" << std::hex << static_cast<uint32_t>(valor)
-               << " (" << std::dec << static_cast<uint32_t>(valor) << ")\n";
+               << " (" << std::dec << static_cast<uint32_t>(valor) << ")" << std::endl;
 
     physicalAddr addr = resolve_addr(endereço);
     if (!addr.ponteiro)
     {
-        logFileMem << get_indent_mem() << "Escrita Cancelada: Ponteiro Inválido\n";
+        logFileMem << get_indent_mem() << "Escrita Cancelada: Ponteiro Inválido" << std::endl;
         indent_levelMem--;
-        logFileMem << get_indent_mem() << "}\n";
+        logFileMem << get_indent_mem() << "}" << std::endl;
         return;
     }
 
     uint8_t seção = (endereço >> 24) & 0xFF;
-    logFileMem << get_indent_mem() << "Seção: 0x" << std::hex << static_cast<uint32_t>(seção) << std::dec << "\n";
+    logFileMem << get_indent_mem() << "Seção: 0x" << std::hex << static_cast<uint32_t>(seção) << std::dec << std::endl;
 
     if (seção == 0x00 || (seção >= 0x08 && seção <= 0x0D) || seção == 0x07)
     {
-        logFileMem << get_indent_mem() << "Escrita Ignorada (Seção Protegida ou Somente Leitura)\n";
+        logFileMem << get_indent_mem() << "Escrita Ignorada (Seção Protegida ou Somente Leitura)" << std::endl;
         indent_levelMem--;
-        logFileMem << get_indent_mem() << "}\n";
+        logFileMem << get_indent_mem() << "}" << std::endl;
         return;
     }
 
     if (seção == 0x05 || seção == 0x06)
     {
         uint32_t base = addr.endereçoMascarado & ~1;
-        logFileMem << get_indent_mem() << "Endereço Mascarado: 0x" << std::hex << addr.endereçoMascarado << std::dec << "\n";
-        logFileMem << get_indent_mem() << "Base Alinhada (16-bit): 0x" << std::hex << base << std::dec << "\n";
+        logFileMem << get_indent_mem() << "Endereço Mascarado: 0x" << std::hex << addr.endereçoMascarado << std::dec << std::endl;
+        logFileMem << get_indent_mem() << "Base Alinhada (16-bit): 0x" << std::hex << base << std::dec << std::endl;
 
         addr.ponteiro[base] = valor;
         addr.ponteiro[base + 1] = valor;
 
-        logFileMem << get_indent_mem() << "Escrita Realizada com Sucesso (Duplicada em 16-bit)\n";
+        logFileMem << get_indent_mem() << "Escrita Realizada com Sucesso (Duplicada em 16-bit)" << std::endl;
         indent_levelMem--;
-        logFileMem << get_indent_mem() << "}\n";
+        logFileMem << get_indent_mem() << "}" << std::endl;
         return;
     }
 
-    logFileMem << get_indent_mem() << "Endereço Mascarado: 0x" << std::hex << addr.endereçoMascarado << std::dec << "\n";
+    logFileMem << get_indent_mem() << "Endereço Mascarado: 0x" << std::hex << addr.endereçoMascarado << std::dec << std::endl;
     addr.ponteiro[addr.endereçoMascarado] = valor;
 
-    logFileMem << get_indent_mem() << "Escrita Realizada com Sucesso\n";
+    logFileMem << get_indent_mem() << "Escrita Realizada com Sucesso" << std::endl;
     indent_levelMem--;
-    logFileMem << get_indent_mem() << "}\n";
+    logFileMem << get_indent_mem() << "}" << std::endl;
 }
+
 void Mem::set16(uint32_t endereço, uint16_t valor)
 {
-    logFileMem << get_indent_mem() << "[Mem::set16] {\n";
+    logFileMem << get_indent_mem() << "[Mem::set16] {" << std::endl;
     indent_levelMem++;
 
-    logFileMem << get_indent_mem() << "Endereço Solicitado: 0x" << std::hex << endereço << std::dec << "\n";
+    logFileMem << get_indent_mem() << "Endereço Solicitado: 0x" << std::hex << endereço << std::dec << std::endl;
     logFileMem << get_indent_mem() << "Valor para Escrita: 0x" << std::hex << static_cast<uint32_t>(valor)
-               << " (" << std::dec << static_cast<uint32_t>(valor) << ")\n";
+               << " (" << std::dec << static_cast<uint32_t>(valor) << ")" << std::endl;
 
     physicalAddr addr = resolve_addr(endereço);
     if (!addr.ponteiro)
     {
-        logFileMem << get_indent_mem() << "Escrita Cancelada: Ponteiro Inválido\n";
+        logFileMem << get_indent_mem() << "Escrita Cancelada: Ponteiro Inválido" << std::endl;
         indent_levelMem--;
-        logFileMem << get_indent_mem() << "}\n";
+        logFileMem << get_indent_mem() << "}" << std::endl;
         return;
     }
 
     uint8_t seção = (endereço >> 24) & 0xFF;
-    logFileMem << get_indent_mem() << "Seção: 0x" << std::hex << static_cast<uint32_t>(seção) << std::dec << "\n";
+    logFileMem << get_indent_mem() << "Seção: 0x" << std::hex << static_cast<uint32_t>(seção) << std::dec << std::endl;
 
     if (seção == 0x00 || (seção >= 0x08 && seção <= 0x0D))
     {
-        logFileMem << get_indent_mem() << "Escrita Ignorada (Seção Protegida ou Somente Leitura)\n";
+        logFileMem << get_indent_mem() << "Escrita Ignorada (Seção Protegida ou Somente Leitura)" << std::endl;
         indent_levelMem--;
-        logFileMem << get_indent_mem() << "}\n";
+        logFileMem << get_indent_mem() << "}" << std::endl;
         return;
     }
 
     if (seção >= 0x0E)
     {
-        logFileMem << get_indent_mem() << "Endereço Mascarado: 0x" << std::hex << addr.endereçoMascarado << std::dec << "\n";
+        logFileMem << get_indent_mem() << "Endereço Mascarado: 0x" << std::hex << addr.endereçoMascarado << std::dec << std::endl;
 
         addr.ponteiro[addr.endereçoMascarado] = valor & 0xFF;
 
-        logFileMem << get_indent_mem() << "Escrita Realizada com Sucesso (8-bit / EEPROM-SRAM)\n";
+        logFileMem << get_indent_mem() << "Escrita Realizada com Sucesso (8-bit / EEPROM-SRAM)" << std::endl;
         indent_levelMem--;
-        logFileMem << get_indent_mem() << "}\n";
+        logFileMem << get_indent_mem() << "}" << std::endl;
         return;
     }
 
     uint32_t base = addr.endereçoMascarado & ~1;
-    logFileMem << get_indent_mem() << "Endereço Mascarado: 0x" << std::hex << addr.endereçoMascarado << std::dec << "\n";
-    logFileMem << get_indent_mem() << "Base Alinhada (16-bit): 0x" << std::hex << base << std::dec << "\n";
+    logFileMem << get_indent_mem() << "Endereço Mascarado: 0x" << std::hex << addr.endereçoMascarado << std::dec << std::endl;
+    logFileMem << get_indent_mem() << "Base Alinhada (16-bit): 0x" << std::hex << base << std::dec << std::endl;
 
     addr.ponteiro[base] = valor & 0xFF;
     addr.ponteiro[base + 1] = (valor >> 8) & 0xFF;
 
-    logFileMem << get_indent_mem() << "Escrita Realizada com Sucesso\n";
+    logFileMem << get_indent_mem() << "Escrita Realizada com Sucesso" << std::endl;
     indent_levelMem--;
-    logFileMem << get_indent_mem() << "}\n";
+    logFileMem << get_indent_mem() << "}" << std::endl;
 }
+
 void Mem::set32(uint32_t endereço, uint32_t valor)
 {
-    logFileMem << get_indent_mem() << "[Mem::set32] {\n";
+    logFileMem << get_indent_mem() << "[Mem::set32] {" << std::endl;
     indent_levelMem++;
 
-    logFileMem << get_indent_mem() << "Endereço Solicitado: 0x" << std::hex << endereço << std::dec << "\n";
-    logFileMem << get_indent_mem() << "Valor para Escrita: 0x" << std::hex << valor << std::dec << " (" << valor << ")\n";
+    logFileMem << get_indent_mem() << "Endereço Solicitado: 0x" << std::hex << endereço << std::dec << std::endl;
+    logFileMem << get_indent_mem() << "Valor para Escrita: 0x" << std::hex << valor << std::dec << " (" << valor << ")" << std::endl;
 
     physicalAddr addr = resolve_addr(endereço);
     if (!addr.ponteiro)
     {
-        logFileMem << get_indent_mem() << "Erro: Ponteiro inválido (Falha no mapeamento de memória)\n";
+        logFileMem << get_indent_mem() << "Erro: Ponteiro inválido (Falha no mapeamento de memória)" << std::endl;
         indent_levelMem--;
-        logFileMem << get_indent_mem() << "}\n";
+        logFileMem << get_indent_mem() << "}" << std::endl;
         return;
     }
 
     uint8_t seção = (endereço >> 24) & 0xFF;
-    logFileMem << get_indent_mem() << "Seção: 0x" << std::hex << +seção << std::dec << "\n";
-    logFileMem << get_indent_mem() << "Endereço Mascarado: 0x" << std::hex << addr.endereçoMascarado << std::dec << "\n";
+    logFileMem << get_indent_mem() << "Seção: 0x" << std::hex << +seção << std::dec << std::endl;
+    logFileMem << get_indent_mem() << "Endereço Mascarado: 0x" << std::hex << addr.endereçoMascarado << std::dec << std::endl;
 
     if (seção == 0x00 || (seção >= 0x08 && seção <= 0x0D))
     {
-        logFileMem << get_indent_mem() << "Aviso: Escrita ignorada (Região protegida/somente leitura)\n";
+        logFileMem << get_indent_mem() << "Aviso: Escrita ignorada (Região protegida/somente leitura)" << std::endl;
         indent_levelMem--;
-        logFileMem << get_indent_mem() << "}\n";
+        logFileMem << get_indent_mem() << "}" << std::endl;
         return;
     }
 
@@ -395,10 +399,10 @@ void Mem::set32(uint32_t endereço, uint32_t valor)
     {
         addr.ponteiro[addr.endereçoMascarado] = valor & 0xFF;
         logFileMem << get_indent_mem() << "Escrita Especial SRAM (Apenas byte inferior gravado: 0x"
-                   << std::hex << (valor & 0xFF) << std::dec << ")\n";
+                   << std::hex << (valor & 0xFF) << std::dec << ")" << std::endl;
 
         indent_levelMem--;
-        logFileMem << get_indent_mem() << "}\n";
+        logFileMem << get_indent_mem() << "}" << std::endl;
         return;
     }
 
@@ -408,11 +412,11 @@ void Mem::set32(uint32_t endereço, uint32_t valor)
     addr.ponteiro[base + 2] = (valor >> 16) & 0xFF;
     addr.ponteiro[base + 3] = (valor >> 24) & 0xFF;
 
-    logFileMem << get_indent_mem() << "Base Alinhada (32-bit): 0x" << std::hex << base << std::dec << "\n";
-    logFileMem << get_indent_mem() << "Escrita Realizada com Sucesso\n";
+    logFileMem << get_indent_mem() << "Base Alinhada (32-bit): 0x" << std::hex << base << std::dec << std::endl;
+    logFileMem << get_indent_mem() << "Escrita Realizada com Sucesso" << std::endl;
 
     indent_levelMem--;
-    logFileMem << get_indent_mem() << "}\n";
+    logFileMem << get_indent_mem() << "}" << std::endl;
 }
 
 physicalAddr Mem::silent_resolve_addr(uint32_t endereço)
@@ -453,6 +457,25 @@ physicalAddr Mem::silent_resolve_addr(uint32_t endereço)
     default:
         return {nullptr, 0};
     }
+}
+
+void Mem::poke16(uint32_t endereço, uint16_t valor)
+{
+    physicalAddr addr = silent_resolve_addr(endereço);
+    if (!addr.ponteiro)
+        return;
+
+    uint8_t seção = (endereço >> 24) & 0xFF;
+
+    if (seção >= 0x0E)
+    {
+        addr.ponteiro[addr.endereçoMascarado] = valor & 0xFF;
+        return;
+    }
+
+    uint32_t base = addr.endereçoMascarado & ~1;
+    addr.ponteiro[base] = valor & 0xFF;
+    addr.ponteiro[base + 1] = (valor >> 8) & 0xFF;
 }
 
 void Mem::poke32(uint32_t endereço, uint32_t valor)
