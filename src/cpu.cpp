@@ -44,6 +44,55 @@ std::string get_indent()
     return std::string(indent_level, '\t');
 }
 
+void Cpu::update_reg_map()
+{
+    CpuMode mode = static_cast<CpuMode>(CPSR & 0x1F);
+
+    for (uint8_t i = 0; i < 16; i++)
+    {
+        regMap[i] = &R[i];
+    }
+
+    switch (mode)
+    {
+    case CpuMode::IRQ:
+        regMap[13] = &R13_irq[0];
+        regMap[14] = &R13_irq[1];
+        SPSRatual = &SPSR_irq;
+        break;
+    case CpuMode::FIQ:
+        for (uint8_t i = 0; i < 7; i++)
+        {
+            regMap[i + 7] = &R8_fiq[i];
+        }
+        SPSRatual = &SPSR_fiq;
+        break;
+    case CpuMode::Abort:
+        regMap[13] = &R13_abt[0];
+        regMap[14] = &R13_abt[1];
+        SPSRatual = &SPSR_abt;
+        break;
+    case CpuMode::Supervisor:
+        regMap[13] = &R13_svc[0];
+        regMap[14] = &R13_svc[1];
+        SPSRatual = &SPSR_svc;
+        break;
+    case CpuMode::Undefined:
+        regMap[13] = &R13_und[0];
+        regMap[14] = &R13_und[1];
+        SPSRatual = &SPSR_und;
+        break;
+
+    case CpuMode::System:
+    case CpuMode::User:
+        SPSRatual = nullptr;
+        break;
+
+    default:
+        break;
+    }
+};
+
 void Cpu::set_reg(uint8_t index, uint32_t valor)
 {
     // pra tratamento com registradores de interrupções
@@ -68,6 +117,7 @@ uint32_t Cpu::get_reg(uint8_t index)
     {
         return (get_bit(CPSR, 5)) ? R[15] + 4 : R[15] + 8;
     }
+    return 0;
 };
 
 OpResult Cpu::shift_barrier(uint32_t shiftType, uint32_t valor, uint8_t count, bool origemImediato, bool flagC)
@@ -271,6 +321,42 @@ bool Cpu::checar_condicao(uint32_t opcode)
     }
 }
 
+uint32_t Cpu::cpu_read32(uint32_t addr)
+{
+    // Tentativa de ler a BIOS estando fora dela?
+    if (addr < 0x00004000 && R[15] >= 0x00004000)
+    {
+        logFile << get_indent() << "[PROTEÇÃO BIOS] Leitura 32-bit bloqueada em 0x"
+                << std::hex << addr << " -> Retornando Latch: 0x" << bios_latch << std::dec << std::endl;
+        return bios_latch;
+    }
+
+    // Leitura normal da memória
+    return memoria->get32(addr).result;
+}
+uint16_t Cpu::cpu_read16(uint32_t addr)
+{
+    if (addr < 0x00004000 && R[15] >= 0x00004000)
+    {
+        // Retorna a halfword correspondente ao alinhamento do endereço no Latch
+        uint32_t shift = (addr & 2) * 8;
+        return static_cast<uint16_t>((bios_latch >> shift) & 0xFFFF);
+    }
+
+    return memoria->get16(addr).result;
+}
+uint8_t Cpu::cpu_read8(uint32_t addr)
+{
+    if (addr < 0x00004000 && R[15] >= 0x00004000)
+    {
+        // Retorna o byte correspondente ao alinhamento do endereço no Latch
+        uint32_t shift = (addr & 3) * 8;
+        return static_cast<uint8_t>((bios_latch >> shift) & 0xFF);
+    }
+
+    return memoria->get8(addr).result;
+}
+
 void Cpu::arm_alu(uint32_t opcode)
 {
     logFile << get_indent() << "[ALU] {" << std::endl;
@@ -308,7 +394,6 @@ void Cpu::arm_alu(uint32_t opcode)
         {
             flagC = get_bit(val, 31);
         }
-        set_reg(Rd, get_reg(Rd) + (1));
     }
     else
     {
@@ -336,6 +421,7 @@ void Cpu::arm_alu(uint32_t opcode)
     }
 
     // resultado e se pode escrever o resultado em rd
+
     uint32_t resultado;
     bool escrever_rd = true;
 
@@ -450,6 +536,20 @@ void Cpu::arm_alu(uint32_t opcode)
 
     default:
         break;
+    }
+
+    bool bitS = (opcode >> 20) & 0x1;
+
+    if (Rd == 15 && bitS)
+    {
+        logFile << get_indent() << "[EXCEÇÃO] Retornando via SPSR para CPSR" << std::endl;
+        CPSR = *SPSRatual;
+        update_reg_map();
+        set_reg(15, resultado);
+
+        indent_level--;
+        logFile << get_indent() << "}" << std::endl;
+        return; // Sai sem alterar as flags do novo CPSR
     }
 
     // é pra atualizar as flags?
@@ -708,7 +808,7 @@ void Cpu::arm_msr(uint32_t opcode)
             break;
 
         case 0b10011:
-            endereçoPSR = &SPSR_swi;
+            endereçoPSR = &SPSR_svc;
             break;
 
         case 0b10111:
@@ -760,34 +860,14 @@ void Cpu::arm_mrs(uint32_t opcode)
 
     if (spsrFlag)
     {
-        uint8_t modeBits = CPSR & 0x1F;
-        switch (modeBits)
+        if (SPSRatual == nullptr)
         {
-        case 0b10000:
-        case 0b11111:
-        case 0b10001:
-        default:
-            logFile << get_indent() << "Erro: Acesso inválido ao SPSR no modo 0x" << std::hex << (int)modeBits << std::dec << std::endl;
+            logFile << get_indent() << "Erro: Acesso inválido ao SPSR no modo 0x" << std::hex << (CPSR & 0x1F) << std::dec << std::endl;
             indent_level--;
             logFile << get_indent() << "}" << std::endl;
             return;
-
-        case 0b10010:
-            endereçoPSR = &SPSR_irq;
-            break;
-
-        case 0b10011:
-            endereçoPSR = &SPSR_swi;
-            break;
-
-        case 0b10111:
-            endereçoPSR = &SPSR_abt;
-            break;
-
-        case 0b11011:
-            endereçoPSR = &SPSR_und;
-            break;
         }
+        endereçoPSR = SPSRatual;
     }
 
     set_reg(Rd, *endereçoPSR);
@@ -846,26 +926,20 @@ void Cpu::arm_sdt(uint32_t opcode)
 
     if (loadStore)
     {
-        OpResult status;
+        uint32_t resultado = 0;
         if (wordByte)
         {
-            status = memoria->get8(endereço);
+            resultado = cpu_read8(endereço);
         }
         else
         {
-            status = memoria->get32(endereço);
+            resultado = cpu_read32(endereço);
             uint8_t desalinhamentoEmBits = (endereço & 0b11) * 8;
-            status.result = std::rotr(status.result, desalinhamentoEmBits);
+            resultado = std::rotr(resultado, desalinhamentoEmBits);
         }
-        if (status.ok)
-        {
-            set_reg(Rd, status.result);
-            logFile << get_indent() << "Lido da memória: 0x" << std::hex << status.result << std::dec << " -> escrito em get_reg(" << (int)Rd << ")" << std::endl;
-        }
-        else
-        {
-            logFile << get_indent() << "Falha ao ler o endereço: 0x" << std::hex << endereço << std::dec << std::endl;
-        }
+
+        set_reg(Rd, resultado);
+        logFile << get_indent() << "Lido da memória: 0x" << std::hex << resultado << std::dec << " -> escrito em get_reg(" << (int)Rd << ")" << std::endl;
     }
     else
     {
@@ -945,41 +1019,25 @@ void Cpu::arm_hw_s(uint32_t opcode)
     {
         if (halfword)
         {
-            OpResult status = memoria->get16(endereço);
-            if (status.ok)
+            uint32_t resultado = cpu_read16(endereço);
+            if (signed_)
             {
-                uint32_t resultado = status.result;
-                if (signed_)
-                {
-                    resultado |= (((get_bit(status.result, 15)) ? 0xFFFF : 0x00) << 16);
-                }
-                set_reg(Rd, resultado);
-                logFile << get_indent() << "Lido da memória (Halfword" << (signed_ ? " Signed" : "") << "): 0x"
-                        << std::hex << resultado << std::dec << " -> escrito em get_reg(" << (int)Rd << ")" << std::endl;
+                resultado |= (((get_bit(resultado, 15)) ? 0xFFFF : 0x00) << 16);
             }
-            else
-            {
-                logFile << get_indent() << "Falha ao ler o endereço: 0x" << std::hex << endereço << std::dec << std::endl;
-            }
+            set_reg(Rd, resultado);
+            logFile << get_indent() << "Lido da memória (Halfword" << (signed_ ? " Signed" : "") << "): 0x"
+                    << std::hex << resultado << std::dec << " -> escrito em get_reg(" << (int)Rd << ")" << std::endl;
         }
         else
         {
-            OpResult status = memoria->get8(endereço);
-            if (status.ok)
+            uint32_t resultado = cpu_read8(endereço);
+            if (signed_)
             {
-                uint32_t resultado = status.result;
-                if (signed_)
-                {
-                    resultado |= (((get_bit(status.result, 7)) ? 0xFFFFFF : 0x00) << 8);
-                }
-                set_reg(Rd, resultado);
-                logFile << get_indent() << "Lido da memória (Byte Signed): 0x"
-                        << std::hex << resultado << std::dec << " -> escrito em get_reg(" << (int)Rd << ")" << std::endl;
+                resultado |= (((get_bit(resultado, 7)) ? 0xFFFFFF : 0x00) << 8);
             }
-            else
-            {
-                logFile << get_indent() << "Falha ao ler o endereço: 0x" << std::hex << endereço << std::dec << std::endl;
-            }
+            set_reg(Rd, resultado);
+            logFile << get_indent() << "Lido da memória (Byte Signed): 0x"
+                    << std::hex << resultado << std::dec << " -> escrito em get_reg(" << (int)Rd << ")" << std::endl;
         }
     }
     else
@@ -1030,8 +1088,6 @@ void Cpu::arm_bdt(uint32_t opcode)
     logFile << get_indent() << "get_reg(" << (int)Rn << ") base: 0x" << std::hex << get_reg(Rn) << std::dec << std::endl;
     logFile << get_indent() << "Lista de registradores: 0x" << std::hex << regList << std::dec << std::endl;
 
-    // Aqui você pode implementar a lógica para LDM/STM conforme necessário
-
     uint32_t start = 0;
     if (upDown)
     {
@@ -1056,20 +1112,7 @@ void Cpu::arm_bdt(uint32_t opcode)
         }
     }
 
-    if (writeBack)
-    {
-        uint32_t totalBytes = std::popcount(regList) * 4;
-        if (upDown)
-        {
-            set_reg(Rn, get_reg(Rn) + (totalBytes));
-        }
-        else
-        {
-            set_reg(Rn, get_reg(Rn) - (totalBytes));
-        }
-        logFile << get_indent() << "Writeback: get_reg(" << (int)Rn << ") atualizado para 0x" << std::hex << get_reg(Rn) << std::dec << std::endl;
-    }
-
+    // 1. Loop de Leitura / Escrita
     uint32_t addr = start;
     for (int i = 0; i < 16; i++)
     {
@@ -1077,24 +1120,40 @@ void Cpu::arm_bdt(uint32_t opcode)
         {
             if (loadStore)
             {
-                OpResult status = memoria->get32(addr);
-                if (status.ok)
-                {
-                    set_reg(i, status.result);
-                    logFile << get_indent() << "Lido da memória: 0x" << std::hex << status.result << std::dec << " -> escrito em get_reg(" << i << ")" << std::endl;
-                }
-                else
-                {
-                    logFile << get_indent() << "Falha ao ler o endereço: 0x" << std::hex << addr << std::dec << std::endl;
-                }
+                uint32_t valor = cpu_read32(addr);
+                set_reg(i, valor);
+                logFile << get_indent() << "Lido da memória: 0x" << std::hex << valor << std::dec << " -> R" << i << std::endl;
             }
             else
             {
                 memoria->set32(addr, get_reg(i));
-                logFile << get_indent() << "Escrito na memória: 0x" << std::hex << get_reg(i) << std::dec << " no endereço 0x" << std::hex << addr << std::dec << std::endl;
+                logFile << get_indent() << "Escrito na memória: R" << i << " (0x" << std::hex << get_reg(i) << ") -> 0x" << addr << std::dec << std::endl;
             }
             addr += 4;
         }
+    }
+
+    // 2. Aplica o Writeback DEPOIS do loop
+    if (writeBack)
+    {
+        uint32_t totalBytes = std::popcount(regList) * 4;
+        uint32_t novoBase = upDown ? (get_reg(Rn) + totalBytes) : (get_reg(Rn) - totalBytes);
+
+        if (!loadStore || !((regList >> Rn) & 1))
+        {
+            set_reg(Rn, novoBase);
+        }
+    }
+
+    // 3. Retorno de Exceção (Bit 22 = S, LDM = 1, PC na lista)
+    bool bitS = (opcode >> 22) & 0x1;
+    bool pcNaLista = (regList >> 15) & 0x1;
+
+    if (bitS && loadStore && pcNaLista)
+    {
+        logFile << get_indent() << "[EXCEÇÃO] LDM restaurando CPSR via SPSR" << std::endl;
+        CPSR = *SPSRatual;
+        update_reg_map();
     }
 
     indent_level--;
@@ -1102,7 +1161,7 @@ void Cpu::arm_bdt(uint32_t opcode)
 }
 void Cpu::arm_swp(uint32_t opcode)
 {
-    logFile << get_indent() << "[SWP]{" << std::endl;
+    logFile << get_indent() << "[SWP] {" << std::endl;
     indent_level++;
 
     bool wordByte = (opcode >> 22) & 0x1;
@@ -1111,60 +1170,56 @@ void Cpu::arm_swp(uint32_t opcode)
     uint8_t Rm = opcode & 0xF;
 
     logFile << get_indent() << "Tipo de Dado: " << ((wordByte) ? "Byte(8 bits)" : "Word(32 bits)") << std::endl;
-    logFile << get_indent() << "Rn: " << std::hex << get_reg(Rn) << std::endl;
-    logFile << get_indent() << "Rm: " << get_reg(Rm) << std::dec << std::endl;
+    logFile << get_indent() << "Rn: 0x" << std::hex << get_reg(Rn) << std::endl;
+    logFile << get_indent() << "Rm: 0x" << get_reg(Rm) << std::dec << std::endl;
 
-    OpResult status;
     if (wordByte)
     {
-        status = memoria->get8(get_reg(Rn));
-        if (status.ok)
-        {
-            set_reg(Rd, status.result);
-            logFile << get_indent() << "Valor Guardado em Rd: " << std::hex << get_reg(Rd) << std::dec << std::endl;
-            memoria->set8(get_reg(Rn), (get_reg(Rm) & 0xFF));
-        }
-        else
-        {
-            logFile << get_indent() << "[ERRO] Mem::get8 Retornou {ok} false" << std::endl;
-            return;
-        }
+        uint32_t val = cpu_read8(get_reg(Rn));
+        set_reg(Rd, val);
+        logFile << get_indent() << "Valor Guardado em Rd: 0x" << std::hex << get_reg(Rd) << std::dec << std::endl;
+        memoria->set8(get_reg(Rn), (get_reg(Rm) & 0xFF));
     }
     else
     {
-        status = memoria->get32(get_reg(Rn));
-        if (status.ok)
-        {
-            set_reg(Rd, status.result);
-            logFile << get_indent() << "Valor Guardado em Rd: " << std::hex << get_reg(Rd) << std::dec << std::endl;
-            memoria->set32(get_reg(Rn), get_reg(Rm));
-        }
-        else
-        {
-            logFile << get_indent() << "[ERRO] Mem::get32 Retornou {ok} false" << std::endl;
-            return;
-        }
+        uint32_t val = cpu_read32(get_reg(Rn));
+        set_reg(Rd, val);
+        logFile << get_indent() << "Valor Guardado em Rd: 0x" << std::hex << get_reg(Rd) << std::dec << std::endl;
+        memoria->set32(get_reg(Rn), get_reg(Rm));
     }
+
     indent_level--;
-    logFile << get_indent() << "}";
+    logFile << get_indent() << "}" << std::endl;
 }
 void Cpu::step_arm()
 {
-    // 1. FETCH
-    OpResult getOpcode = memoria->get32(R[15]);
+    // 1. FETCH & ATUALIZAÇÃO DO BIOS LATCH
+    uint32_t pc_execucao = get_reg(15);
+    OpResult getOpcode = memoria->get32(pc_execucao);
     uint32_t opcode = getOpcode.result;
 
-    logFile << get_indent() << "[STEP] {" << std::endl;
+    // Se a instrução foi buscada da BIOS, salva o valor no Latch de proteção anti-dump
+    if (pc_execucao < 0x00004000)
+    {
+        bios_latch = opcode;
+    }
+
+    // Prepara a flag para detectar se a instrução atual modificou o PC
+    pc_alterado = false;
+
+    logFile << get_indent() << "[STEP ARM] {" << std::endl;
     indent_level++;
-    logFile << get_indent() << "PC atual: 0x" << std::hex << R[15] << std::dec << std::endl;
+    logFile << get_indent() << "PC atual: 0x" << std::hex << pc_execucao << std::dec << std::endl;
     logFile << get_indent() << "Opcode lido: 0x" << std::hex << opcode << std::dec << std::endl;
 
     // 2. CHECK CONDITION (Bits 31..28)
     if (!checar_condicao(opcode))
     {
         logFile << get_indent() << "Condição não satisfeita, instrução ignorada." << std::endl;
+        set_reg(15, pc_execucao + 4); // Avança PC mesmo se a instrução for ignorada
         indent_level--;
-        return; // Instrução ignorada se a condição der falsa
+        logFile << get_indent() << "}" << std::endl;
+        return;
     }
 
     // 3. DECODE & DISPATCH (Bits 27..25)
@@ -1174,10 +1229,10 @@ void Cpu::step_arm()
     {
     case 0b000:
     {
-        // Checa se os bits 7 e 4 são ambos 1 (Assinatura das instruções extras)
+        // Se bits 7 e 4 forem 1 (Halfword Data Transfer, Multiplicações estendidas)
         if (((opcode >> 7) & 1) && ((opcode >> 4) & 1))
         {
-            uint8_t sh = (opcode >> 5) & 0x3; // Bits 6..5 (S e H)
+            uint8_t sh = (opcode >> 5) & 0x3; // Bits 6..5
 
             if (sh != 0)
             {
@@ -1186,47 +1241,51 @@ void Cpu::step_arm()
             else
             {
                 uint8_t op_mul = (opcode >> 20) & 0xFF;
-
-                // Multiplicações de 32 bits (MUL, MLA) e 64 bits (UMULL, SMULL, etc.)
                 if ((op_mul & 0xFC) == 0x00 || (op_mul & 0xF8) == 0x08)
                 {
-                    arm_mul(opcode);
+                    arm_mul(opcode); // MUL, MLA, UMULL, SMULL, etc.
                 }
-                else if ((op_mul & 0xFB) == 0x10 && ((opcode >> 4) & 0xFF) == 0x09)
+                else
                 {
-                    arm_swp(opcode);
+                    interrupt(CpuMode::Undefined, 0x00000004);
                 }
             }
         }
         else
         {
-            // Checa se é instrução de status (MRS/MSR) ou salto relativo (BX/BLX)
-            uint8_t op_misc = (opcode >> 20) & 0x1F;
-
-            if ((op_misc & 0x19) == 0x10)
+            // Checa SWP (Bits 27..23 == 00010, Bits 11..4 == 00001001)
+            if (((opcode >> 20) & 0xFB) == 0x10 && ((opcode >> 4) & 0xFF) == 0x09)
             {
-                uint8_t bits_11_4 = (opcode >> 4) & 0xFF;
-
-                if ((bits_11_4 & 0x0F) == 0x0)
-                {
-                    // Bit 21 = 0 é MRS (ler status), Bit 21 = 1 é MSR (escrever status)
-                    if ((opcode >> 21) & 1)
-                        arm_msr(opcode);
-                    else
-                        arm_mrs(opcode);
-                }
-                else if ((opcode & 0x0FFFFFF0) == 0x012FFF30)
-                {
-                    arm_bx(opcode); // BX, BLX por registrador
-                }
-                else
-                {
-                    arm_alu(opcode); // Operação de ALU via registrador com Shift
-                }
+                arm_swp(opcode);
             }
             else
             {
-                arm_alu(opcode); // Operação de ALU padrão
+                uint8_t op_misc = (opcode >> 20) & 0x1F;
+
+                if ((op_misc & 0x19) == 0x10)
+                {
+                    uint8_t bits_11_4 = (opcode >> 4) & 0xFF;
+
+                    if ((bits_11_4 & 0x0F) == 0x0)
+                    {
+                        if ((opcode >> 21) & 1)
+                            arm_msr(opcode);
+                        else
+                            arm_mrs(opcode);
+                    }
+                    else if ((opcode & 0x0FFFFFF0) == 0x012FFF10) // BX ARMv4T
+                    {
+                        arm_bx(opcode);
+                    }
+                    else
+                    {
+                        arm_alu(opcode);
+                    }
+                }
+                else
+                {
+                    arm_alu(opcode);
+                }
             }
         }
         break;
@@ -1242,14 +1301,14 @@ void Cpu::step_arm()
         }
         else
         {
-            arm_alu(opcode); // ALU com Imediato rotacionado
+            arm_alu(opcode); // ALU com imediato
         }
         break;
     }
 
     case 0b010:
     {
-        arm_sdt(opcode); // LDR, STR, LDRB, STRB (Offset Imediato)
+        arm_sdt(opcode); // LDR, STR (Offset imediato)
         break;
     }
 
@@ -1258,34 +1317,59 @@ void Cpu::step_arm()
         bool bit4 = (opcode >> 4) & 1;
         if (!bit4)
         {
-            arm_sdt(opcode); // LDR, STR, LDRB, STRB (Offset de Registrador)
+            arm_sdt(opcode); // LDR, STR (Offset registrador)
+        }
+        else
+        {
+            interrupt(CpuMode::Undefined, 0x00000004);
         }
         break;
     }
 
     case 0b100:
     {
-        arm_bdt(opcode); // LDM / STM (Block Transfer)
+        arm_bdt(opcode); // LDM, STM
         break;
     }
 
     case 0b101:
     {
-        arm_branch(opcode); // B e BL (Desvios com offset de 24 bits)
+        arm_branch(opcode); // B, BL
+        break;
+    }
+
+    case 0b110:
+    {
+        interrupt(CpuMode::Undefined, 0x00000004);
+        break;
+    }
+
+    case 0b111:
+    {
+        if ((opcode & 0x0F000000) == 0x0F000000)
+        {
+            interrupt(CpuMode::Supervisor, 0x00000008); // SWI
+        }
+        else
+        {
+            interrupt(CpuMode::Undefined, 0x00000004);
+        }
         break;
     }
 
     default:
     {
-        std::cout << "[ERRO CPU] Opcode nao mapeado: 0x" << std::hex << opcode
-                  << " no PC: 0x" << R[15] << std::dec << std::endl;
+        logFile << get_indent() << "[ERRO CPU] Opcode ARM invalido: 0x" << std::hex << opcode
+                << " no PC: 0x" << pc_execucao << std::dec << std::endl;
+        interrupt(CpuMode::Undefined, 0x00000004);
         break;
     }
     }
 
-    if (pc_alterado)
+    // Se NENHUM salto foi executado pela instrução, avança para a próxima instrução
+    if (!pc_alterado)
     {
-        R[15] = R[15] + 4;
+        set_reg(15, get_reg(15) + 4);
     }
 
     indent_level--;
@@ -1701,17 +1785,10 @@ void Cpu::thumb_format_6(uint16_t opcode)
             << " | Offset: 0x" << (imm8 << 2) << " (imm8: 0x" << imm8 << ")" << std::dec << std::endl;
     logFile << get_indent() << "Endereço final: 0x" << std::hex << endereco << std::dec << std::endl;
 
-    OpResult status = memoria->get32(endereco);
-    if (status.ok)
-    {
-        set_reg(Rd, status.result);
-        logFile << get_indent() << "Lido da memória: 0x" << std::hex << status.result
-                << std::dec << " -> escrito em get_reg(" << (int)Rd << ")" << std::endl;
-    }
-    else
-    {
-        logFile << get_indent() << "Falha ao ler o endereço: 0x" << std::hex << endereco << std::dec << std::endl;
-    }
+    uint32_t resultado = cpu_read32(endereco);
+    set_reg(Rd, resultado);
+    logFile << get_indent() << "Lido da memória: 0x" << std::hex << resultado
+            << std::dec << " -> escrito em get_reg(" << (int)Rd << ")" << std::endl;
 
     indent_level--;
     logFile << get_indent() << "}" << std::endl;
@@ -1737,34 +1814,19 @@ void Cpu::thumb_format_7(uint16_t opcode)
 
     if (L) // Operations: LDR / LDRB
     {
-        OpResult status;
         if (B)
         {
-            status = memoria->get8(endereco); // LDRB (Zero-extended)
-            if (status.ok)
-            {
-                set_reg(Rd, status.result);
-                logFile << get_indent() << "Lido da memória (Byte): 0x" << std::hex << status.result
-                        << std::dec << " -> escrito em get_reg(" << (int)Rd << ")" << std::endl;
-            }
-            else
-            {
-                logFile << get_indent() << "Falha ao ler o endereço: 0x" << std::hex << endereco << std::dec << std::endl;
-            }
+            uint32_t resultado = cpu_read8(endereco); // LDRB (Zero-extended)
+            set_reg(Rd, resultado);
+            logFile << get_indent() << "Lido da memória (Byte): 0x" << std::hex << resultado
+                    << std::dec << " -> escrito em get_reg(" << (int)Rd << ")" << std::endl;
         }
         else
         {
-            status = memoria->get32(endereco); // LDR
-            if (status.ok)
-            {
-                set_reg(Rd, status.result);
-                logFile << get_indent() << "Lido da memória (Word): 0x" << std::hex << status.result
-                        << std::dec << " -> escrito em get_reg(" << (int)Rd << ")" << std::endl;
-            }
-            else
-            {
-                logFile << get_indent() << "Falha ao ler o endereço: 0x" << std::hex << endereco << std::dec << std::endl;
-            }
+            uint32_t resultado = cpu_read32(endereco); // LDR
+            set_reg(Rd, resultado);
+            logFile << get_indent() << "Lido da memória (Word): 0x" << std::hex << resultado
+                    << std::dec << " -> escrito em get_reg(" << (int)Rd << ")" << std::endl;
         }
     }
     else // Operations: STR / STRB
@@ -1816,45 +1878,24 @@ void Cpu::thumb_format_8(uint16_t opcode)
     }
     else if (!S && H)
     {
-        OpResult status = memoria->get16(addr);
-        if (status.ok)
-        {
-            set_reg(Rd, status.result);
-            logFile << get_indent() << "Lido da memória (LDRH): 0x" << std::hex << status.result
-                    << std::dec << " -> escrito em get_reg(" << (int)Rd << ")" << std::endl;
-        }
-        else
-        {
-            logFile << get_indent() << "Falha ao ler o endereço: 0x" << std::hex << addr << std::dec << std::endl;
-        }
+        uint32_t resultado = cpu_read16(addr);
+        set_reg(Rd, resultado);
+        logFile << get_indent() << "Lido da memória (LDRH): 0x" << std::hex << resultado
+                << std::dec << " -> escrito em get_reg(" << (int)Rd << ")" << std::endl;
     }
     else if (S && !H)
     {
-        OpResult status = memoria->get8(addr);
-        if (status.ok)
-        {
-            set_reg(Rd, (int32_t)(int8_t)status.result);
-            logFile << get_indent() << "Lido da memória com extensão de sinal (LDSB): 0x" << std::hex << get_reg(Rd)
-                    << std::dec << " -> escrito em get_reg(" << (int)Rd << ")" << std::endl;
-        }
-        else
-        {
-            logFile << get_indent() << "Falha ao ler o endereço: 0x" << std::hex << addr << std::dec << std::endl;
-        }
+        uint32_t val = cpu_read8(addr);
+        set_reg(Rd, static_cast<uint32_t>(static_cast<int32_t>(static_cast<int8_t>(val))));
+        logFile << get_indent() << "Lido da memória com extensão de sinal (LDSB): 0x" << std::hex << get_reg(Rd)
+                << std::dec << " -> escrito em get_reg(" << (int)Rd << ")" << std::endl;
     }
     else if (S && H)
     {
-        OpResult status = memoria->get16(addr);
-        if (status.ok)
-        {
-            set_reg(Rd, (int32_t)(int16_t)status.result);
-            logFile << get_indent() << "Lido da memória com extensão de sinal (LDSH): 0x" << std::hex << get_reg(Rd)
-                    << std::dec << " -> escrito em get_reg(" << (int)Rd << ")" << std::endl;
-        }
-        else
-        {
-            logFile << get_indent() << "Falha ao ler o endereço: 0x" << std::hex << addr << std::dec << std::endl;
-        }
+        uint32_t val = cpu_read16(addr);
+        set_reg(Rd, static_cast<uint32_t>(static_cast<int32_t>(static_cast<int16_t>(val))));
+        logFile << get_indent() << "Lido da memória com extensão de sinal (LDSH): 0x" << std::hex << get_reg(Rd)
+                << std::dec << " -> escrito em get_reg(" << (int)Rd << ")" << std::endl;
     }
 
     indent_level--;
@@ -1883,31 +1924,17 @@ void Cpu::thumb_format_9(uint16_t opcode)
     {
         if (B)
         {
-            OpResult status = memoria->get8(addr);
-            if (status.ok)
-            {
-                set_reg(Rd, status.result);
-                logFile << get_indent() << "Lido da memória (Byte): 0x" << std::hex << status.result
-                        << std::dec << " -> escrito em get_reg(" << (int)Rd << ")" << std::endl;
-            }
-            else
-            {
-                logFile << get_indent() << "Falha ao ler o endereço: 0x" << std::hex << addr << std::dec << std::endl;
-            }
+            uint32_t resultado = cpu_read8(addr);
+            set_reg(Rd, resultado);
+            logFile << get_indent() << "Lido da memória (Byte): 0x" << std::hex << resultado
+                    << std::dec << " -> escrito em get_reg(" << (int)Rd << ")" << std::endl;
         }
         else
         {
-            OpResult status = memoria->get32(addr);
-            if (status.ok)
-            {
-                set_reg(Rd, status.result);
-                logFile << get_indent() << "Lido da memória (Word): 0x" << std::hex << status.result
-                        << std::dec << " -> escrito em get_reg(" << (int)Rd << ")" << std::endl;
-            }
-            else
-            {
-                logFile << get_indent() << "Falha ao ler o endereço: 0x" << std::hex << addr << std::dec << std::endl;
-            }
+            uint32_t resultado = cpu_read32(addr);
+            set_reg(Rd, resultado);
+            logFile << get_indent() << "Lido da memória (Word): 0x" << std::hex << resultado
+                    << std::dec << " -> escrito em get_reg(" << (int)Rd << ")" << std::endl;
         }
     }
     else
@@ -1949,17 +1976,10 @@ void Cpu::thumb_format_10(uint16_t opcode)
 
     if (L)
     {
-        OpResult status = memoria->get16(addr);
-        if (status.ok)
-        {
-            set_reg(Rd, status.result);
-            logFile << get_indent() << "Lido da memória (Halfword): 0x" << std::hex << status.result
-                    << std::dec << " -> escrito em get_reg(" << (int)Rd << ")" << std::endl;
-        }
-        else
-        {
-            logFile << get_indent() << "Falha ao ler o endereço: 0x" << std::hex << addr << std::dec << std::endl;
-        }
+        uint32_t resultado = cpu_read16(addr);
+        set_reg(Rd, resultado);
+        logFile << get_indent() << "Lido da memória (Halfword): 0x" << std::hex << resultado
+                << std::dec << " -> escrito em get_reg(" << (int)Rd << ")" << std::endl;
     }
     else
     {
@@ -1990,17 +2010,10 @@ void Cpu::thumb_format_11(uint16_t opcode)
 
     if (L)
     {
-        OpResult status = memoria->get32(addr);
-        if (status.ok)
-        {
-            set_reg(Rd, status.result);
-            logFile << get_indent() << "Lido da memória: 0x" << std::hex << status.result
-                    << std::dec << " -> escrito em get_reg(" << (int)Rd << ")" << std::endl;
-        }
-        else
-        {
-            logFile << get_indent() << "Falha ao ler o endereço: 0x" << std::hex << addr << std::dec << std::endl;
-        }
+        uint32_t resultado = cpu_read32(addr);
+        set_reg(Rd, resultado);
+        logFile << get_indent() << "Lido da memória: 0x" << std::hex << resultado
+                << std::dec << " -> escrito em get_reg(" << (int)Rd << ")" << std::endl;
     }
     else
     {
@@ -2084,7 +2097,7 @@ void Cpu::thumb_format_14(uint16_t opcode)
     {
         if (storeLR_loadPC)
         {
-            set_reg(13, get_reg(13) - (4));
+            set_reg(13, get_reg(13) - 4);
             memoria->set32(get_reg(13), get_reg(14));
             logFile << get_indent() << "PUSH R14 (LR): 0x" << std::hex << get_reg(14) << " em 0x" << get_reg(13) << std::dec << std::endl;
         }
@@ -2092,7 +2105,7 @@ void Cpu::thumb_format_14(uint16_t opcode)
         {
             if ((regList >> i) & 1)
             {
-                set_reg(13, get_reg(13) - (4));
+                set_reg(13, get_reg(13) - 4);
                 memoria->set32(get_reg(13), get_reg(i));
                 logFile << get_indent() << "PUSH get_reg(" << i << "): 0x" << std::hex << get_reg(i) << " em 0x" << get_reg(13) << std::dec << std::endl;
             }
@@ -2104,24 +2117,18 @@ void Cpu::thumb_format_14(uint16_t opcode)
         {
             if ((regList >> i) & 1)
             {
-                OpResult status = memoria->get32(get_reg(13));
-                if (status.ok)
-                {
-                    set_reg(i, status.result);
-                    logFile << get_indent() << "POP get_reg(" << i << "): 0x" << std::hex << get_reg(i) << " de 0x" << get_reg(13) << std::dec << std::endl;
-                }
-                set_reg(13, get_reg(13) + (4));
+                uint32_t val = cpu_read32(get_reg(13));
+                set_reg(i, val);
+                logFile << get_indent() << "POP get_reg(" << i << "): 0x" << std::hex << val << " de 0x" << get_reg(13) << std::dec << std::endl;
+                set_reg(13, get_reg(13) + 4);
             }
         }
         if (storeLR_loadPC)
         {
-            OpResult status = memoria->get32(get_reg(13));
-            if (status.ok)
-            {
-                set_reg(15, status.result & ~1U);
-                logFile << get_indent() << "POP PC (R15): 0x" << std::hex << get_reg(15) << " de 0x" << get_reg(13) << std::dec << std::endl;
-            }
-            set_reg(13, get_reg(13) + (4));
+            uint32_t val = cpu_read32(get_reg(13));
+            set_reg(15, val & ~1U); // Garante alinhamento de instrução no PC
+            logFile << get_indent() << "POP PC (R15): 0x" << std::hex << get_reg(15) << " de 0x" << get_reg(13) << std::dec << std::endl;
+            set_reg(13, get_reg(13) + 4);
         }
     }
 
@@ -2150,12 +2157,9 @@ void Cpu::thumb_format_15(uint16_t opcode)
         {
             if (isLoad)
             {
-                OpResult status = memoria->get32(addr);
-                if (status.ok)
-                {
-                    set_reg(i, status.result);
-                    logFile << get_indent() << "Lido da memória 0x" << std::hex << addr << ": 0x" << get_reg(i) << " -> escrito em get_reg(" << std::dec << i << ")" << std::endl;
-                }
+                uint32_t val = cpu_read32(addr);
+                set_reg(i, val);
+                logFile << get_indent() << "Lido da memória 0x" << std::hex << addr << ": 0x" << val << " -> escrito em get_reg(" << std::dec << i << ")" << std::endl;
             }
             else
             {
@@ -2165,8 +2169,13 @@ void Cpu::thumb_format_15(uint16_t opcode)
             addr += 4;
         }
     }
-    set_reg(Rb, addr);
-    logFile << get_indent() << "Writeback get_reg(" << (int)Rb << ") atualizado para 0x" << std::hex << get_reg(Rb) << std::dec << std::endl;
+
+    // Writeback só se aplica se for STMIA ou se Rb NÃO foi um dos registradores carregados
+    if (!isLoad || !((regList >> Rb) & 1))
+    {
+        set_reg(Rb, addr);
+        logFile << get_indent() << "Writeback get_reg(" << (int)Rb << ") atualizado para 0x" << std::hex << get_reg(Rb) << std::dec << std::endl;
+    }
 
     indent_level--;
     logFile << get_indent() << "}" << std::endl;
@@ -2276,16 +2285,25 @@ void Cpu::thumb_format_19(uint16_t opcode)
 }
 void Cpu::step_thumb()
 {
-    // Fetch da instrução (16 bits) no PC atual e avanço do PC em +2
-    uint16_t opcode = memoria->get16(R[15]).result;
-    uint32_t pc_atual = R[15];
+    // 1. FETCH & ATUALIZAÇÃO DO BIOS LATCH
+    uint32_t pc_atual = get_reg(15);
+    uint16_t opcode = memoria->get16(pc_atual).result;
+
+    // Em Thumb (16 bits), o barramento de 32 bits da BIOS duplica a halfword lida
+    if (pc_atual < 0x00004000)
+    {
+        bios_latch = (static_cast<uint32_t>(opcode) << 16) | opcode;
+    }
+
+    // Prepara a flag para detectar se a instrução atual modificou o PC
+    pc_alterado = false;
 
     logFile << get_indent() << "[STEP THUMB] {" << std::endl;
     indent_level++;
     logFile << get_indent() << "PC atual: 0x" << std::hex << pc_atual << std::dec << std::endl;
     logFile << get_indent() << "Opcode lido: 0x" << std::hex << opcode << std::dec << std::endl;
 
-    // Decodificação rápida usando os 5 bits superiores (15..11)
+    // 2. DECODE & DISPATCH (Bits 15..11)
     uint8_t top5 = opcode >> 11;
 
     switch (top5)
@@ -2309,13 +2327,9 @@ void Cpu::step_thumb()
 
     case 0x08:
         if ((opcode & 0x0400) == 0)
-        {
             thumb_format_4(opcode);
-        }
         else
-        {
             thumb_format_5(opcode);
-        }
         break;
 
     case 0x09:
@@ -2325,13 +2339,9 @@ void Cpu::step_thumb()
     case 0x0A:
     case 0x0B:
         if ((opcode & 0x0200) == 0)
-        {
             thumb_format_7(opcode);
-        }
         else
-        {
             thumb_format_8(opcode);
-        }
         break;
 
     case 0x0C:
@@ -2366,6 +2376,12 @@ void Cpu::step_thumb()
         {
             thumb_format_14(opcode);
         }
+        else
+        {
+            logFile << get_indent() << "[ERRO CPU] Opcode THUMB invalido (0xB...): 0x" << std::hex << opcode
+                    << " no PC: 0x" << pc_atual << std::dec << std::endl;
+            interrupt(CpuMode::Undefined, 0x00000004);
+        }
         break;
 
     case 0x18:
@@ -2377,7 +2393,7 @@ void Cpu::step_thumb()
     case 0x1B:
         if ((opcode & 0xFF00) == 0xDF00)
         {
-            thumb_format_17(opcode);
+            interrupt(CpuMode::Supervisor, 0x00000008); // SWI em Thumb
         }
         else
         {
@@ -2397,20 +2413,88 @@ void Cpu::step_thumb()
     default:
         logFile << get_indent() << "[ERRO CPU] Opcode THUMB nao mapeado: 0x" << std::hex << opcode
                 << " no PC: 0x" << pc_atual << std::dec << std::endl;
+        interrupt(CpuMode::Undefined, 0x00000004);
         break;
     }
 
+    // Se NENHUM salto foi executado pela instrução, avança o PC em +2 bytes
     if (!pc_alterado)
     {
-        R[15] = R[15] + 2;
+        set_reg(15, get_reg(15) + 2);
     }
 
     indent_level--;
     logFile << get_indent() << "}" << std::endl;
 }
 
+void Cpu::interrupt(CpuMode mode, uint32_t jumpAddr)
+{
+    uint32_t oldCPSR = CPSR;
+    bool estavaEmThumb = (CPSR & (1 << 5)) != 0;
+
+    // 1. Cálculo do LR de acordo com o tipo de exceção
+    uint32_t PCretorno;
+
+    switch (mode)
+    {
+    case CpuMode::Supervisor: // SWI
+    case CpuMode::Undefined:  // Instrução Inválida
+        // SWI e Undefined completam ou abortam a instrução apontando para a próxima
+        PCretorno = R[15] + (estavaEmThumb ? 2 : 4);
+        break;
+
+    case CpuMode::IRQ: // Interrupção de Hardware
+    case CpuMode::FIQ: // Fast Interrupt
+        // IRQ e FIQ abortam no início do fetch (precisam compensar o -4 do SUBS)
+        PCretorno = R[15] + 4;
+        break;
+
+    default:
+        PCretorno = R[15] + 4;
+        break;
+    }
+
+    // 2. Transição de CPSR
+    CPSR &= ~(0x1F);                     // Limpa bits de modo
+    CPSR |= static_cast<uint32_t>(mode); // Seta novo modo (Supervisor, FIQ, etc)
+    set_bit(CPSR, 5, false);             // Força modo ARM (T = 0)
+    set_bit(CPSR, 7, true);              // Desativa IRQs normais (Bit I = 1)
+
+    // Se for FIQ, a arquitetura ARM também desativa novos FIQs (Bit F = 1)
+    if (mode == CpuMode::FIQ)
+    {
+        set_bit(CPSR, 6, true); // Bit F = 1
+    }
+
+    // 3. Atualiza ponteiros de registradores bancados
+    update_reg_map();
+
+    // 4. Salva o contexto antigo no SPSR do NOVO modo
+    *SPSRatual = oldCPSR;
+
+    // 5. Configura o retorno e o salto do vetor
+    set_reg(14, PCretorno);
+    set_reg(15, jumpAddr);
+}
+
 void Cpu::step()
 {
+    // Leitura crua dos registradores de 16 bits
+    uint16_t IE = memoria->get16(static_cast<uint32_t>(IorAddr::IE)).result;
+    uint16_t IF = memoria->get16(static_cast<uint32_t>(IorAddr::IF)).result;
+    uint16_t IME = memoria->get16(static_cast<uint32_t>(IorAddr::IME)).result;
+
+    bool IRQhabilitada = get_bit(CPSR, 7) == 0; // Bit I = 0 no CPSR
+
+    // Checa se o bit 0 do IME está ativo E se há bit comum entre IE e IF
+    bool irqPendente = (IME & 1) && ((IE & IF) != 0) && IRQhabilitada;
+
+    if (irqPendente)
+    {
+        interrupt(CpuMode::IRQ, 0x00000018);
+        return;
+    }
+
     pc_alterado = false;
     if (get_bit(CPSR, 5))
     {
@@ -2421,6 +2505,7 @@ void Cpu::step()
         step_arm();
     }
 }
+
 void Cpu::set_r(uint8_t index, uint32_t value)
 {
     if (index < 16)
